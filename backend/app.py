@@ -19,7 +19,8 @@ from pydantic import BaseModel, Field
 
 from .api.jobs import get_jobs
 from .config import ROOT, settings
-from .graph.queries import NAMED_QUERIES, GraphQueries
+from .graph.insights import Insights
+from .graph.queries import NAMED_QUERIES, GraphQueries, slim_node
 from .graph.store import GID_RE, get_store
 from .kg.acquire import AcquisitionError, normalize_repo_url, validate_ref
 from .kg.model import ANALYZER_VERSION, SCHEMA_VERSION
@@ -247,6 +248,41 @@ def impact(gid: str = Depends(graph_or_404), root_id: str = Query(...), depth: i
     if not q.node(root_id):
         raise HTTPException(404, "root entity not found")
     return q.impact_of(root_id, depth, include_candidates)
+
+
+@app.get("/api/graph/{gid}/profile")
+def profile(gid: str = Depends(graph_or_404)):
+    """Plain-English 4-line summary + architecture of the repository (deterministic, from the graph)."""
+    return Insights(get_store(), gid).repo_profile()
+
+
+@app.get("/api/graph/{gid}/flow")
+def flow(gid: str = Depends(graph_or_404), api_id: str = Query(..., max_length=500), include_candidates: bool = True):
+    """Step-by-step request flow of one endpoint: client -> API -> controller -> service -> data -> SQL -> table."""
+    try:
+        return Insights(get_store(), gid).request_flow(api_id, include_candidates)
+    except KeyError:
+        raise HTTPException(404, "endpoint not found")
+
+
+@app.get("/api/graph/{gid}/impact-report")
+def impact_report(gid: str = Depends(graph_or_404), root_id: str = Query(..., max_length=500),
+                  depth: int = Query(4, ge=1, le=6), include_candidates: bool = True):
+    """Scored impact assessment (evidence-based dependents + clearly labelled potential impact)."""
+    try:
+        return Insights(get_store(), gid).impact_report(root_id, depth, include_candidates)
+    except KeyError:
+        raise HTTPException(404, "entity not found")
+
+
+@app.get("/api/graph/{gid}/edge")
+def edge(gid: str = Depends(graph_or_404), edge_id: str = Query(..., max_length=200)):
+    st = get_store()
+    e = st.get_edge(gid, edge_id)
+    if not e:
+        raise HTTPException(404, "relationship not found")
+    s, t = st.get_node(gid, e["source"]), st.get_node(gid, e["target"])
+    return {"edge": e, "source": slim_node(s) if s else None, "target": slim_node(t) if t else None}
 
 
 @app.get("/api/graph/{gid}/path")

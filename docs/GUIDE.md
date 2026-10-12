@@ -6,11 +6,16 @@
 | Java / Python / SQL / OpenAPI / MyBatis analyzers, resolver, validator | done, tested |
 | In-memory graph store (persisted) + named queries, impact, API→DB, paths | done, tested |
 | Neo4j store (parameterised templates) | written; **run the parity test on your machine (step 5)** |
-| NLP `/ask` (rule planner, Gemini optional, grounding check, CLARIFY/abstain) | done, 20 labelled questions pass |
+| NLP `/ask` (23 intents, plain-English + developer answer, Cypher, 5-step breakdown, fuzzy names) | done; dev 50/50, held-out 26/26, frozen blind 20/20 |
 | Gemini → Cypher (validator, self-repair, read-only execution, fallback) | done; 40 validator/routing tests pass with mocked Gemini — **verify live with your key (step 5)** |
 | Large-repo overview (handler class → table, grouped by module) | done, tested on 238-endpoint repo |
-| Cytoscape UI (architecture/structure/focus/x-lang, search, filters, evidence, ask, diagnostics) | done, browser-tested |
-| Tests: 93 pass · fixture precision/recall/F1 = 1.0 · clean install on Python 3.11 | verified |
+| Website: navbar with Overview · Explore graph · Ask · Request flow · Impact · Quality, light/dark, mobile | done, browser-tested, 0 console errors |
+| Repo summary (4 lines) + architecture lanes | done (Overview page) |
+| Node and relationship evidence (file, line, highlighted code, GitHub link, "why?") | done |
+| Request flow (client → API → controller → service → data access → SQL → table) | done |
+| Impact risk model (blast radius, risk levels, tests to run, heuristic side effects) | done |
+| Accuracy report with fixed / improved / later loopholes | done — `docs/EVALUATION.md` |
+| Tests: 102 pass · fixture P/R/F1 = 1.0 · real-repo sampled precision 95.8 % → 100 % after fix | verified |
 
 ## 1. Install tools (once, ~20 min)
 1. **Git for Windows** — https://git-scm.com/download/win (defaults are fine).
@@ -29,7 +34,7 @@ py -3.11 -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 copy .env.example .env
-python -m pytest -q                     # expect: 93 passed, 2 skipped
+python -m pytest -q                     # expect: 102 passed, 2 skipped
 python scripts\evaluate.py              # expect: overall precision 1.0 recall 1.0
 python -m uvicorn backend.app:app --reload
 ```
@@ -83,25 +88,25 @@ Use **Plan** mode (`/plan`) for anything big, review the diff before accepting, 
 `python -m pytest -q` and `python scripts\evaluate.py`. Commit after each green step: `git add -A; git commit -m "..."`.
 
 ## 7. Two-day plan
-**Mon evening:** steps 1–3; analyze 3 repos (petclinic, petclinic-rest, microblog); read README "Measured results".
-**Tue:** step 4 (Neo4j), step 5 (Gemini → Cypher); label ~30 real edges from petclinic by hand (open file:line evidence in
-the Details panel, mark correct/incorrect) → real-repo precision for your report; take screenshots.
-**Wed (before review):** rehearse the demo script below twice; keep `docs/screenshots` as backup if Wi-Fi fails
-(graphs persist in `data/`, so analyze BEFORE the review).
+**Mon evening:** steps 1–3; analyze spring-petclinic-rest, spring-boot-realworld and django-realworld; read `docs/EVALUATION.md`.
+**Tue:** step 4 (Neo4j Desktop), step 5 (Gemini key); rehearse the demo; copy the Cypher tab of 3 answers into Neo4j Browser.
+**Wed (before review):** analyze the demo repos BEFORE the review (graphs persist in `data/`); keep `docs/screenshots` as backup.
 
-## 8. Demo script (8 minutes)
-1. `/api/health` → backend + NLP mode. 2. Analyze spring-petclinic → summary card (17/17 APIs, 7 tables).
-3. Architecture view: API → handler → repository → table. 4. Click an edge → evidence, file:line, VERIFIED/CANDIDATE.
-5. Ask: "Which tables are touched by POST /owners/new?" → path + facts. 6. "What is impacted if I change the owners table?"
-7. "Which tests cover OwnerController?" 8. Unanswerable: "Which method handles POST /refunds?" → system abstains.
-9. Diagnostics tab: quality report (resolved vs external calls, rejected edges). 10. petclinic-rest: CANDIDATE handlers
-from openapi-generator convention — explain why they are not VERIFIED.
+## 8. Demo script (8 minutes) — repo: spring-petclinic-rest
+1. **Overview**: read the 4-line summary; point at the architecture lanes (API → Controller → Service → Data access → Database).
+2. **Explore graph**: search `saveOwner` → click it → file, line, highlighted code, GitHub link. Click an arrow → CONFIRMED vs PROBABLE + reason.
+3. **Ask**: "Which tables are touched by POST /owners?" → show the Plain English, Developer, Cypher and *How it was answered* tabs.
+4. Ask "What is impacted if I change the owners table?", then "Which endpoints have no tests?".
+5. Unanswerable: "Who handles POST /refunds?" → the system says NOT FOUND instead of inventing an answer.
+6. **Request flow**: POST /owners → lanes + 15 numbered steps with evidence.
+7. **Impact**: `ClinicServiceImpl.saveOwner` → blast radius, risk, tests to run; open "How the risk is calculated".
+8. **Quality**: what was parsed, what was not; then show `docs/EVALUATION.md` (95.8 % → 100 %, honest loopholes).
 
 ## 9. Viva answers (short)
 - **Why a graph?** Relationships are explicit and traversable; every edge has evidence and status.
-- **Why an LLM if the graph exists?** Only to understand the question (QueryPlan) and phrase facts; it never writes Cypher and its text must pass a grounding check.
+- **Why an LLM if the graph exists?** To understand free-form questions and phrase facts. If it writes Cypher, that Cypher must pass the allowlist validator (read-only, scoped, bounded) and runs in a READ transaction; impact/flow/paths always use reviewed traversals.
 - **Missing edge?** System says "insufficient evidence"; we add a parser rule + fixture test, never let the LLM invent it.
-- **How accurate?** Fixture P/R/F1 = 1.0 per relationship type (designed coverage); real repos: coverage numbers in README + your hand-labelled sample.
+- **How accurate?** Fixture P/R/F1 = 1.0; 119 hand-checked real edges: 95.8 % before the mock fix, 100 % after, 24/24 on a fresh sample; NLP blind set 19/20 on first run (see docs/EVALUATION.md).
 - **Never claim:** perfect understanding of any repo, runtime proof of calls, that impact predicts breakage, that Gemini can safely run arbitrary Cypher.
 
 ## 10. Troubleshooting

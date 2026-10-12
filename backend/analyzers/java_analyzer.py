@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 import tree_sitter_java as tsj
 from tree_sitter import Language, Node, Parser
 
-from ..kg.model import Entity, EntityType, RelType, Status, make_id, snake_case, table_id
+from ..kg.model import Entity, EntityType, RelType, Status, make_id, snake_case
 from .common import AnalysisContext, HttpCall, add_route
 from .sql_analyzer import add_sql, ensure_column, ensure_table, looks_like_sql, looks_like_sql_strict
 
@@ -108,6 +108,7 @@ class JType:
     super_generics: dict = field(default_factory=dict)       # base simple -> [type args]
     fields: dict = field(default_factory=dict)               # name -> type text
     field_nodes: list = field(default_factory=list)          # (name, type, annotations, line, static)
+    mock_fields: set = field(default_factory=set)            # fields annotated @Mock/@MockBean/... or = mock(X.class)
     consts: dict = field(default_factory=dict)               # name -> string value
     methods: list = field(default_factory=list)
     annotations: dict = field(default_factory=dict)
@@ -126,6 +127,9 @@ class JFile:
     static_wild: list = field(default_factory=list)
     types: list = field(default_factory=list)
     is_test: bool = False
+
+
+MOCK_ANNOTATIONS = {"Mock", "MockBean", "MockitoBean"}   # @Spy/@SpyBean call real code, so they still count
 
 
 @dataclass
@@ -149,6 +153,7 @@ class JavaIndex:
         self.sql: list[dict] = []
         self.feign_routes: dict[str, list[tuple[str, str]]] = {}
         self.locals_cache: dict[str, dict] = {}
+        self.returns: dict[str, list] = {}         # method id -> [(string, dynamic)] returned (views/redirects)
 
 
 # =========================================================================================
@@ -347,6 +352,10 @@ class JavaAnalyzer:
         jf.types.append(fqn)
         end = node.end_point[0] + 1
         props = {"annotations": sorted(anns), "package": jf.package, "is_test_code": jf.is_test}
+        # same annotation name, different meaning: MapStruct @Mapper (DTO mapping) vs MyBatis @Mapper (SQL)
+        if "Mapper" in anns:
+            src_imp = jf.imports.get("Mapper", "") or next((w for w in jf.wildcards if "mapstruct" in w or "ibatis" in w), "")
+            props["annotation_origin"] = "mapstruct" if "mapstruct" in src_imp else ("mybatis" if "ibatis" in src_imp else "")
         if node.type == "record_declaration":
             props["record"] = True
         self.gb.add_entity(Entity(id=jt.id, type=kind.value, name=name, qualified_name=fqn, file=jf.path,
@@ -393,6 +402,8 @@ class JavaAnalyzer:
             jt.fields[fname] = ftype
             jt.field_nodes.append((fname, ftype, anns, d.start_point[0] + 1, static))
             val = d.child_by_field_name("value")
+            if MOCK_ANNOTATIONS & set(anns) or (val is not None and re.match(r"^(Mockito\.)?mock\s*\(", _t(val, src))):
+                jt.mock_fields.add(fname)
             if val is not None and _base_type(ftype) == "String":
                 s, dyn = _static_string(val, src, _StrCtx(self, jt))
                 if s is not None:
@@ -595,6 +606,25 @@ class JavaAnalyzer:
                     queue.append(r[0])
         return out
 
+    def is_mock_receiver(self, recv: tuple | None, jm: "JMethod") -> bool:
+        """True when a call's receiver is a Mockito/Spring test double (calls on it never reach production code)."""
+        if not recv:
+            return False
+        if recv[0] == "name":
+            fname = recv[1]
+        elif recv[0] == "field" and recv[1] and recv[1][0] == "this":
+            fname = recv[2]
+        else:
+            return False
+        cur = self.idx.types.get(jm.cls)
+        while cur is not None:
+            for t in [cur.fqn] + self.supertypes(cur.fqn):
+                jt = self.idx.types.get(t)
+                if jt and fname in jt.fields:
+                    return fname in jt.mock_fields
+            cur = self.idx.types.get(cur.outer) if cur.outer else None
+        return False
+
     def field_type(self, fqn: str, fname: str) -> tuple[str, JType] | None:
         for t in [fqn] + self.supertypes(fqn):
             jt = self.idx.types.get(t)
@@ -695,6 +725,17 @@ class JavaAnalyzer:
             elif tp == "object_creation_expression":
                 tname = _t(n.child_by_field_name("type"), src)
                 self.idx.news.append((jm, tname, n.start_point[0] + 1))
+                if _base_type(tname) in ("ModelAndView", "RedirectView"):
+                    args = n.child_by_field_name("arguments")
+                    if args is not None and args.named_children:
+                        v, dyn = _static_string(args.named_children[0], src, _StrCtx(self, jt, ls))
+                        if v:
+                            pre = "redirect:" if _base_type(tname) == "RedirectView" and not v.startswith("redirect:") else ""
+                            self.idx.returns.setdefault(jm.id, []).append((pre + v, dyn))
+            elif tp == "return_statement" and n.named_children:
+                v, dyn = _static_string(n.named_children[0], src, _StrCtx(self, jt, ls))
+                if v:
+                    self.idx.returns.setdefault(jm.id, []).append((v, dyn))
             elif tp == "method_reference":
                 kids = n.named_children
                 if kids:
@@ -878,6 +919,33 @@ class JavaAnalyzer:
                             gb.rel(tid, self._entity_table[r[0]], RelType.FOREIGN_KEY, kind="JPA_MAPPING",
                                    evidence=f"{fname}: {_base_type(ftype)}", file=owner.file, line=fline,
                                    reason="@ManyToOne/@OneToOne association", column=col)
+        # ---- JPA associations: cascade graph + @OneToMany @JoinColumn foreign keys
+        self._cascade: dict[str, list[tuple[str, str]]] = {}     # entity fqn -> [(target entity fqn, field)]
+        for fqn, tid in self._entity_table.items():
+            owner = idx.types[fqn]
+            jf = idx.files[owner.file]
+            sc = _StrCtx(self, owner)
+            for fname, ftype, anns, fline, static in owner.field_nodes:
+                assoc = {"OneToMany", "ManyToMany", "OneToOne", "ManyToOne"} & set(anns)
+                if not assoc:
+                    continue
+                args = _generic_args(ftype)
+                target_t = args[-1] if args else ftype
+                r = self.resolve_type(target_t, owner)
+                if not r or r[0] not in self._entity_table:
+                    continue
+                a = next(iter(assoc))
+                text = _t(anns[a], jf.src)
+                if re.search(r"cascade\s*=\s*[^)]*(ALL|PERSIST|MERGE)", text):
+                    self._cascade.setdefault(fqn, []).append((r[0], fname))
+                if a == "OneToMany" and "JoinColumn" in anns:
+                    col = (_ann_values(anns["JoinColumn"], jf.src, sc).get("name") or [None])[0]
+                    child_tid = self._entity_table[r[0]]
+                    if isinstance(col, str) and col:
+                        ensure_column(gb, child_tid.split(":", 1)[1], {"name": col, "type": "", "pk": False, "nullable": True},
+                                      file=owner.file, line=fline, kind="JPA_MAPPING")
+                    gb.rel(child_tid, tid, RelType.FOREIGN_KEY, kind="JPA_MAPPING", evidence=f"@OneToMany @JoinColumn({col}) {owner.simple}.{fname}",
+                           file=owner.file, line=fline, reason="@OneToMany with @JoinColumn: child table holds the parent key", column=col)
         # ---- inheritance
         for jt in idx.types.values():
             for rel_t, names in ((RelType.EXTENDS, jt.extends), (RelType.IMPLEMENTS, jt.implements)):
@@ -920,12 +988,14 @@ class JavaAnalyzer:
                            file=jf.path, reason="import declaration resolved to repository type")
         # ---- Spring Data repositories
         repo_info: dict[str, str] = {}
+        repo_entity: dict[str, str] = {}
         for jt in idx.types.values():
             if jt.kind != EntityType.INTERFACE.value:
                 continue
             ent, tid = self._spring_data_entity(jt.fqn)
             if tid:
                 repo_info[jt.fqn] = tid
+                repo_entity[jt.fqn] = ent
                 gb.get(jt.id).props["spring_data_repository"] = True
                 gb.get(jt.id).props["entity"] = ent
                 for m in jt.methods:
@@ -971,8 +1041,16 @@ class JavaAnalyzer:
                         gb.rel(jm.id, repo_info[recv_fqn], op, kind="SPRING_DATA_INHERITED", evidence=pc.evidence,
                                file=jm.file, line=pc.line, status=Status.CANDIDATE if cand else Status.VERIFIED,
                                reason=f"inherited Spring Data CRUD method {pc.name}() on repository of this entity")
+                        if op == RelType.WRITES:
+                            for ctid, path in self.cascade_tables(repo_entity.get(recv_fqn)):
+                                gb.rel(jm.id, ctid, RelType.WRITES, kind="JPA_CASCADE", evidence=pc.evidence, file=jm.file,
+                                       line=pc.line, status=Status.CANDIDATE,
+                                       reason=f"{pc.name}() cascades through JPA association {path} (cascade ALL/PERSIST/MERGE)")
                         self.ctx.stats["resolved_calls"] += 1
                         continue
+                if recv_fqn in idx.types and pc.recv and pc.recv[0] == "implicit":
+                    self.ctx.stats["unresolved_calls"] += 1     # most likely a statically imported library helper
+                    continue
                 if recv_fqn in idx.types:
                     rt = idx.types[recv_fqn]
                     if LOMBOK_ACCESSORS & set(rt.annotations) and re.match(r"^(get|set|is|with|builder|toBuilder)", pc.name):
@@ -996,6 +1074,8 @@ class JavaAnalyzer:
                 if tm.id == jm.id and pc.recv and pc.recv[0] not in ("implicit", "this"):
                     pass
                 if jm.kind == EntityType.TEST.value:
+                    if self.is_mock_receiver(pc.recv, jm):
+                        continue    # stubbing/verifying a mock (given/when/verify) does not exercise the real method
                     if not idx.files[tm.file].is_test:
                         gb.rel(jm.id, tm.id, RelType.TESTS, kind="JAVA_TEST_CALL", evidence=pc.evidence, file=jm.file,
                                line=pc.line, status=status, reason="test invokes " + reason)
@@ -1022,6 +1102,42 @@ class JavaAnalyzer:
                     exec_reason=s.get("reason", ""), dynamic=s["dynamic"],
                     entity_tables=entity_tables if s.get("jpql") else None)
         self.entity_tables = entity_tables
+        # ---- Spring MVC navigation: view names and redirects returned by @Controller handlers
+        for mid, vals in idx.returns.items():
+            jm = idx.methods.get(mid)
+            ent = gb.get(mid)
+            if not jm or not ent:
+                continue
+            jt = idx.types[jm.cls]
+            is_view_controller = "Controller" in jt.annotations and "RestController" not in jt.annotations \
+                and "ResponseBody" not in jm.annotations
+            views, redirects = [], []
+            for v, dyn in vals:
+                v = v.strip()
+                if v.startswith(("redirect:", "forward:")):
+                    path = v.split(":", 1)[1].replace("?", "{}")
+                    redirects.append({"path": path, "dynamic": dyn})
+                elif is_view_controller and re.fullmatch(r"[A-Za-z0-9_\-/.{}?]+", v) and len(v) < 120:
+                    views.append(v.replace("?", "{}"))
+            if views:
+                ent.props["renders_views"] = sorted(set(views))[:10]
+            if redirects:
+                ent.props["redirects_to"] = redirects[:10]
+
+    def cascade_tables(self, entity_fqn: str | None, depth: int = 4) -> list[tuple[str, str]]:
+        """Tables written transitively when entity_fqn is saved (JPA cascade)."""
+        out, seen = [], {entity_fqn}
+        stack = [(entity_fqn, self.idx.types[entity_fqn].simple if entity_fqn in self.idx.types else "")] if entity_fqn else []
+        while stack:
+            cur, path = stack.pop()
+            for tgt, field in getattr(self, "_cascade", {}).get(cur, []):
+                if tgt in seen or len(seen) > depth + 1:
+                    continue
+                seen.add(tgt)
+                p2 = f"{path}.{field}"
+                out.append((self._entity_table[tgt], p2))
+                stack.append((tgt, p2))
+        return out
 
     def method_by_qualified(self, cls_fqn: str, name: str) -> list[JMethod]:
         jt = self.idx.types.get(cls_fqn)

@@ -25,6 +25,11 @@ public class OrderDao {
         return order;
     }
 
+    /** Old CSV export, no longer referenced anywhere. */
+    public String legacyExport() {
+        return "id,sku,quantity";
+    }
+
     public void updateStatus(long id, String status) {
         String sql = """
             UPDATE orders

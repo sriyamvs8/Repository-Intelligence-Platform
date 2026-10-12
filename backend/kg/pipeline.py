@@ -5,7 +5,6 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Callable
 
 from ..analyzers.common import AnalysisContext, match_routes
@@ -32,6 +31,7 @@ class AnalysisResult:
     diagnostics: list[dict]
     rejected: list[dict]
     report: dict = field(default_factory=dict)
+    sources: dict = field(default_factory=dict)      # analyzed text files (for evidence snippets)
 
 
 def graph_id_for(url: str, ref: str | None, commit: str | None) -> str:
@@ -141,7 +141,7 @@ def analyze_source(src: RepoSource, progress: Progress | None = None) -> Analysi
     for f in files_by_kind.get("sql", []):
         t = text_of(f)
         if t is not None:
-            safe(analyze_sql_file, f, gb, f.path, t)
+            safe(analyze_sql_file, f, gb, f.path, t, ctx.named_sql)
     # ---- Phase C: resolution
     progress("Resolving symbols and relationships", 0.72)
     for name, an in (("java", java), ("python", py)):
@@ -184,11 +184,13 @@ def analyze_source(src: RepoSource, progress: Progress | None = None) -> Analysi
 
     progress("Validating graph", 0.9)
     validate(gb, {f.path for f in sr.files})
+    attach_snippets(gb, texts)
     report = quality_report(gb, sr, ctx, time.time() - t0)
     meta = {
         "repo_url": src.url, "repo_key": src.key, "ref": src.ref, "commit": src.commit,
         "analyzed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "schema_version": SCHEMA_VERSION, "analyzer_version": ANALYZER_VERSION,
+        "web_url": web_url(src.url),
     }
     gid = graph_id_for(src.url, src.ref, src.commit)
     meta["graph_id"] = gid
@@ -198,7 +200,50 @@ def analyze_source(src: RepoSource, progress: Progress | None = None) -> Analysi
         entities=[e.to_dict() for e in gb.entities.values()],
         relationships=[r.to_dict() for r in gb.relationships.values() if r.status != Status.REJECTED.value],
         diagnostics=[d.to_dict() for d in gb.diagnostics],
-        rejected=gb.rejected, report=report)
+        rejected=gb.rejected, report=report,
+        sources={k: v for k, v in texts.items() if v is not None and make_id("file", k) in gb.entities})
+
+
+def web_url(url: str) -> str | None:
+    """https://github.com/a/b.git -> https://github.com/a/b (used to build 'open in GitHub' links)."""
+    if not url or not url.startswith("https://"):
+        return None
+    return url[:-4] if url.endswith(".git") else url
+
+
+def attach_snippets(gb: GraphBuilder, texts: dict) -> None:
+    """Store the exact source lines behind every entity and relationship (evidence shown in the UI).
+    Entities: declaration line + up to 7 following lines (bounded by end_line). Relationships: evidence line ±1."""
+    lines_cache: dict[str, list[str]] = {}
+
+    def lines_of(path: str | None) -> list[str] | None:
+        if not path:
+            return None
+        if path not in lines_cache:
+            t = texts.get(path)
+            lines_cache[path] = t.splitlines() if t else []
+        return lines_cache[path]
+
+    skip = {EntityType.REPOSITORY.value, EntityType.DIRECTORY.value, EntityType.FILE.value}
+    for e in gb.entities.values():
+        if e.type in skip or not e.line:
+            continue
+        ls = lines_of(e.file)
+        if not ls or e.line > len(ls):
+            continue
+        end = min(len(ls), e.line + 7, e.end_line or e.line + 7)
+        snippet = "\n".join(l.rstrip()[:200] for l in ls[e.line - 1:end])
+        e.props["snippet"] = snippet[:1200]
+        e.props["snippet_start"] = e.line
+    for r in gb.relationships.values():
+        if not r.line or r.source_kind == "FILESYSTEM":
+            continue
+        ls = lines_of(r.file)
+        if not ls or r.line > len(ls):
+            continue
+        start = max(1, r.line - 1)
+        r.props["snippet"] = "\n".join(l.rstrip()[:200] for l in ls[start - 1:min(len(ls), r.line + 1)])[:700]
+        r.props["snippet_start"] = start
 
 
 def validate(gb: GraphBuilder, scanned_files: set[str]) -> None:

@@ -8,6 +8,8 @@ repositories and answers natural-language questions ONLY from graph facts. See R
 - Install: `python -m pip install -r requirements.txt`
 - Tests (must stay green): `python -m pytest -q`
 - Accuracy on labelled fixture (must stay 1.0 for every type): `python scripts/evaluate.py`
+- NLP accuracy: `python scripts/eval_nlp.py all` (dev ≥ 0.95, held-out ≥ 0.9; the petclinic blind set is frozen by sha256, never tune on it)
+- Full accuracy report: docs/EVALUATION.md
 - Run: `python -m uvicorn backend.app:app --reload` → http://127.0.0.1:8000 (UI), /docs (API)
 - CLI: `python scripts/cli.py analyze <github-url>` / `python scripts/cli.py ask <gid> "<question>"`
 
@@ -34,4 +36,4 @@ repositories and answers natural-language questions ONLY from graph facts. See R
 
 ## Layout
 backend/kg (model, acquire, scanner, pipeline) · backend/analyzers · backend/graph (store, neo4j_store, queries)
-· backend/nlp (plan, gemini, cypher, engine) · backend/api/jobs.py · backend/app.py · frontend/ · tests/ · scripts/
+· backend/graph/insights.py (profile, flow, impact report) · backend/nlp (plan, gemini, cypher, engine) · backend/api/jobs.py · backend/app.py · frontend/ · tests/ · scripts/

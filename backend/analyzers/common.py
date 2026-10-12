@@ -31,7 +31,9 @@ class AnalysisContext:
     stats: dict[str, Any] = field(default_factory=lambda: {"unresolved_calls": 0, "resolved_calls": 0,
                                                             "candidate_calls": 0})
     test_files: set[str] = field(default_factory=set)
-    spec_ops: list[dict] = field(default_factory=list)      # OpenAPI operations (for generator/connexion linking)
+    spec_ops: list[dict] = field(default_factory=list)
+    named_sql: dict = field(default_factory=dict)          # aiosql-style named queries: name -> [sql ids]
+    migrations: list[dict] = field(default_factory=list)   # Alembic op.create_table / add_column      # OpenAPI operations (for generator/connexion linking)
     unresolved_samples: int = 0
 
     def unresolved(self, file: str, line: int | None, what: str) -> None:

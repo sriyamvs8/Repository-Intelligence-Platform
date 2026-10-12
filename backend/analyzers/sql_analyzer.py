@@ -493,9 +493,29 @@ def add_sql(gb: GraphBuilder, sql: str, *, file: str, line: int | None, language
     return sid
 
 
-def analyze_sql_file(gb: GraphBuilder, rel_path: str, text: str) -> int:
+_NAME_RE = re.compile(r"^\s*--\s*name\s*:\s*([A-Za-z_][\w\-]*)", re.M)
+
+
+def analyze_sql_file(gb: GraphBuilder, rel_path: str, text: str, named: dict | None = None) -> int:
+    """Analyze a SQL script. Named statements (aiosql / PugSQL / yesql `-- name: get-user`) are recorded in
+    `named` so Python/Java code calling them by name can be linked with EXECUTES."""
+    names = [(text.count("\n", 0, m.start()) + 1, m.group(1).replace("-", "_")) for m in _NAME_RE.finditer(text)]
     count = 0
+    seen_lines: list[int] = []
     for stmt, line in split_statements(text):
-        if add_sql(gb, stmt, file=rel_path, line=line, language="sql"):
-            count += 1
+        seen_lines.append(line)
+        sid = add_sql(gb, stmt, file=rel_path, line=line, language="sql")
+        if not sid:
+            continue
+        count += 1
+        prior = [n for ln, n in names if ln <= line]
+        if prior and named is not None:
+            qname = prior[-1]
+            # only if no other statement started between the name comment and this one
+            name_line = max(ln for ln, n in names if ln <= line)
+            if not any(name_line < l2 < line for l2 in seen_lines[:-1]):
+                named.setdefault(qname, []).append(sid)
+                ent = gb.get(sid)
+                ent.props["query_name"] = qname
+                ent.name = f"{qname} ({ent.props.get('operation', '')})"
     return count

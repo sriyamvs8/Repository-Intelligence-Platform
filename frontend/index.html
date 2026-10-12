@@ -4,125 +4,257 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Repository Knowledge Graph</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='8' cy='8' r='5' fill='%2360a5fa'/%3E%3Ccircle cx='24' cy='12' r='5' fill='%23a78bfa'/%3E%3Ccircle cx='13' cy='25' r='5' fill='%2334d399'/%3E%3Cpath d='M8 8L24 12L13 25Z' stroke='%2394a3b8' stroke-width='2' fill='none'/%3E%3C/svg%3E" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232f6fe0'/%3E%3Ccircle cx='10' cy='11' r='3.5' fill='white'/%3E%3Ccircle cx='22' cy='11' r='3.5' fill='white'/%3E%3Ccircle cx='16' cy='22' r='3.5' fill='white'/%3E%3Cpath d='M10 11L22 11L16 22Z' stroke='white' stroke-width='1.6' fill='none'/%3E%3C/svg%3E" />
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
-<header class="topbar">
-  <div class="brand"><span class="logo">◆</span><div><b>Repository Knowledge Graph</b><small>Java · Python · SQL · REST</small></div></div>
-  <form id="analyzeForm" class="analyze" autocomplete="off">
-    <input id="repoUrl" type="text" placeholder="https://github.com/owner/repo" required aria-label="Repository URL" />
-    <input id="repoRef" type="text" placeholder="branch / tag (optional)" aria-label="Git ref" />
-    <label class="chk" title="Re-analyze even if this commit was analyzed before"><input id="force" type="checkbox" /> force</label>
-    <button type="submit" class="primary" id="analyzeBtn">Analyze</button>
-  </form>
-  <select id="graphSelect" aria-label="Analyzed repositories"><option value="">Analyzed repositories…</option></select>
-  <div class="badges" id="badges"></div>
-  <button class="icon" id="themeBtn" title="Toggle theme" aria-label="Toggle theme">◐</button>
+<!-- ============================== NAVBAR ============================== -->
+<header class="navbar">
+  <a class="brand" href="#overview" aria-label="Home">
+    <span class="logo" aria-hidden="true"><svg viewBox="0 0 32 32" width="28" height="28"><rect width="32" height="32" rx="8" fill="currentColor"/><circle cx="10" cy="11" r="3.5" fill="#fff"/><circle cx="22" cy="11" r="3.5" fill="#fff"/><circle cx="16" cy="22" r="3.5" fill="#fff"/><path d="M10 11L22 11L16 22Z" stroke="#fff" stroke-width="1.6" fill="none"/></svg></span>
+    <span class="brand-text"><b>RepoGraph</b><small>Repository Knowledge Graph</small></span>
+  </a>
+  <nav class="tabs-nav" id="nav" aria-label="Main">
+    <a href="#overview" data-page="overview"><span class="ico">◎</span>Overview</a>
+    <a href="#explore" data-page="explore"><span class="ico">⬡</span>Explore graph</a>
+    <a href="#ask" data-page="ask"><span class="ico">✦</span>Ask</a>
+    <a href="#flow" data-page="flow"><span class="ico">⇢</span>Request flow</a>
+    <a href="#impact" data-page="impact"><span class="ico">◬</span>Impact</a>
+    <a href="#quality" data-page="quality"><span class="ico">✓</span>Quality</a>
+  </nav>
+  <div class="nav-right">
+    <div class="repo-picker">
+      <label for="graphSelect" class="sr-only">Repository</label>
+      <select id="graphSelect" title="Switch repository"><option value="">No repository</option></select>
+    </div>
+    <button class="btn primary" id="openAnalyze"><span>＋</span><span class="lbl">Analyze repo</span></button>
+    <span class="status-dot" id="statusDot" title="Checking server…"></span>
+    <button class="btn icon" id="helpBtn" title="How to use this tool" aria-label="Help">?</button>
+    <button class="btn icon" id="themeBtn" title="Light / dark theme" aria-label="Toggle theme">☾</button>
+  </div>
 </header>
-<div id="progress" class="progress hidden"><div class="bar"><span id="progressBar"></span></div><span id="progressMsg"></span></div>
 
-<main class="layout">
-  <aside class="left">
-    <section class="card" id="summaryCard">
-      <h3>Repository</h3>
-      <div id="summary" class="muted">Analyze a public GitHub repository or pick one from the list.</div>
-    </section>
-    <section class="card">
-      <h3>Search</h3>
-      <input id="searchBox" type="search" placeholder="class, method, /route, table…" aria-label="Search entities" />
-      <ul id="searchResults" class="results"></ul>
-    </section>
-    <section class="card">
-      <h3>View</h3>
-      <div class="seg" id="modeSeg">
-        <button data-mode="architecture" class="on" title="API → code → SQL → tables">Architecture</button>
-        <button data-mode="ecosystem" title="Repository → directories → files">Structure</button>
-        <button data-mode="hops" title="Neighbourhood of the selected entity">Focus</button>
-        <button data-mode="cross-language" title="HTTP calls between services/languages">X-lang</button>
-      </div>
-      <div class="row"><label>Hops <input id="hops" type="range" min="1" max="3" value="1" /><span id="hopsVal">1</span></label>
-        <label>Max <input id="maxNodes" type="number" min="10" max="600" value="150" /></label></div>
-      <div class="row"><label class="chk"><input id="incCand" type="checkbox" checked /> candidate edges</label>
-        <label class="chk"><input id="incStruct" type="checkbox" /> structure</label>
-        <label class="chk"><input id="edgeLabels" type="checkbox" /> labels</label></div>
-      <div class="row"><label>Layout <select id="layoutSel">
-        <option value="dagre">Layered (dagre)</option><option value="fcose">Force (fCoSE)</option>
-        <option value="breadthfirst">Tree</option><option value="concentric">Concentric</option><option value="grid">Grid</option>
-      </select></label></div>
-    </section>
-    <section class="card">
-      <h3>Named queries</h3>
-      <div class="row"><select id="querySel">
-        <option value="apis_and_handlers">APIs and handlers</option>
-        <option value="api_to_database_path">API → database paths</option>
-        <option value="sql_and_tables">SQL and tables</option>
-        <option value="tables_and_columns">Tables and columns</option>
-        <option value="call_graph">Call graph</option>
-        <option value="classes_and_methods">Classes and methods</option>
-        <option value="inheritance">Inheritance</option>
-        <option value="tests_and_targets">Tests and targets</option>
-        <option value="cross_language">Cross-language</option>
-        <option value="impact_of">Impact of selected</option>
-        <option value="dependencies_of">Dependencies of selected</option>
-      </select><button id="runQuery">Run</button></div>
-    </section>
-    <section class="card">
-      <h3>Filters <button class="link" id="resetFilters">reset</button></h3>
-      <div id="typeFilters" class="filters"></div>
-      <div id="relFilters" class="filters rels"></div>
-    </section>
-  </aside>
-
-  <section class="center">
-    <div class="toolbar">
-      <span id="viewTitle" class="viewtitle">No graph loaded</span>
-      <span class="spacer"></span>
-      <button class="icon" id="fitBtn" title="Fit to view">⤢</button>
-      <button class="icon" id="zoomIn" title="Zoom in">+</button>
-      <button class="icon" id="zoomOut" title="Zoom out">−</button>
-      <button class="icon" id="expandBtn" title="Expand selected node">⊕</button>
-      <button class="icon" id="pngBtn" title="Export PNG">⇩</button>
-    </div>
-    <div id="cy" aria-label="Knowledge graph canvas"></div>
-    <div id="emptyState" class="empty">
-      <div class="emptyinner">
-        <h2>Understand a repository by its relationships</h2>
-        <p>Paste a public GitHub URL above. The analyzer extracts classes, methods, REST endpoints, SQL statements and tables, links them with evidence-backed edges and lets you ask questions in plain English.</p>
-        <div class="examples">
-          <button data-url="https://github.com/spring-projects/spring-petclinic">spring-petclinic (Java)</button>
-          <button data-url="https://github.com/spring-petclinic/spring-petclinic-rest">petclinic-rest (Java+OpenAPI)</button>
-          <button data-url="https://github.com/miguelgrinberg/microblog">microblog (Flask)</button>
-        </div>
+<main id="app">
+  <!-- ============================== WELCOME ============================== -->
+  <section class="page" id="page-welcome">
+    <div class="hero">
+      <h1>Understand any Java · Python · SQL · REST codebase in minutes</h1>
+      <p class="lead">Paste a public GitHub link. RepoGraph reads the code (it never runs it), links every endpoint to the code
+        that handles it and the database tables it touches, and lets you ask questions in plain English.</p>
+      <form class="hero-form" id="heroForm" autocomplete="off">
+        <input id="heroUrl" type="url" placeholder="https://github.com/owner/repository" required aria-label="Repository URL" />
+        <button class="btn primary lg" type="submit">Analyze</button>
+      </form>
+      <div class="examples">Try:
+        <button class="chip" data-url="https://github.com/spring-petclinic/spring-petclinic-rest">spring-petclinic-rest <em>Java+SQL+REST</em></button>
+        <button class="chip" data-url="https://github.com/gothinkster/spring-boot-realworld-example-app">spring-boot-realworld <em>Java+MyBatis</em></button>
+        <button class="chip" data-url="https://github.com/gothinkster/django-realworld-example-app">django-realworld <em>Python+REST</em></button>
       </div>
     </div>
-    <div id="legend" class="legend"></div>
-    <div id="truncNote" class="trunc hidden"></div>
+    <div class="steps3">
+      <div class="step"><span class="num">1</span><h3>Analyze</h3><p>Clone and parse the repository: classes, methods, REST endpoints, SQL and tables.</p></div>
+      <div class="step"><span class="num">2</span><h3>Understand</h3><p>Read a plain-English summary and architecture, explore the graph, trace a request end-to-end.</p></div>
+      <div class="step"><span class="num">3</span><h3>Ask &amp; assess</h3><p>Ask questions in natural language and check what a change would impact — every fact links to file and line.</p></div>
+    </div>
+    <div class="features">
+      <div class="feature"><b>◎ Overview</b><span>What the repo does, in 4 sentences, plus its layers.</span></div>
+      <div class="feature"><b>⬡ Explore graph</b><span>Click any node or arrow to see the exact code behind it.</span></div>
+      <div class="feature"><b>✦ Ask</b><span>“Who calls findById?” — answer, Cypher and evidence.</span></div>
+      <div class="feature"><b>⇢ Request flow</b><span>Follow an endpoint from request to database.</span></div>
+      <div class="feature"><b>◬ Impact</b><span>Risk-scored list of what a change can affect.</span></div>
+      <div class="feature"><b>✓ Quality</b><span>How complete and trustworthy the analysis is.</span></div>
+    </div>
+    <div id="recentRepos" class="recent"></div>
   </section>
 
-  <aside class="right">
-    <div class="tabs"><button data-tab="ask" class="on">Ask</button><button data-tab="details">Details</button><button data-tab="diag">Diagnostics</button></div>
-    <section id="tab-ask" class="tab on">
-      <div id="chat" class="chat">
-        <div class="hint">Ask about the analyzed repository, for example:
-          <ul class="sugg">
-            <li>Which tables are touched by POST /owners/new?</li>
-            <li>Who calls findById?</li>
-            <li>What is impacted if I change the owners table?</li>
-            <li>Which tests cover OwnerController?</li>
-            <li>list all endpoints</li>
-          </ul>
-        </div>
+  <!-- ============================== OVERVIEW ============================== -->
+  <section class="page" id="page-overview">
+    <div class="page-head">
+      <div><h1 id="ovTitle">Overview</h1><p class="sub" id="ovSub"></p></div>
+      <div class="head-actions">
+        <a class="btn" href="#ask">✦ Ask a question</a><a class="btn" href="#flow">⇢ Trace a request</a><a class="btn" href="#impact">◬ Check impact</a>
       </div>
-      <form id="askForm" class="askform">
-        <textarea id="question" rows="2" placeholder="Ask a question about this repository…" aria-label="Question"></textarea>
-        <button class="primary" type="submit" id="askBtn">Ask</button>
-      </form>
-    </section>
-    <section id="tab-details" class="tab"><div id="details" class="muted pad">Select a node or edge in the graph.</div></section>
-    <section id="tab-diag" class="tab"><div id="diag" class="muted pad">No graph loaded.</div></section>
-  </aside>
+    </div>
+    <div class="grid-ov">
+      <article class="card about">
+        <h2>About this repository <span class="tag" title="Generated from the code graph, not guessed">from code evidence</span></h2>
+        <ol class="about-lines" id="aboutLines"></ol>
+        <div class="tech" id="techChips"></div>
+      </article>
+      <article class="card stats-card"><h2>At a glance</h2><div class="tiles" id="tiles"></div></article>
+      <article class="card arch">
+        <h2>Architecture <span class="muted small">— how a request moves through the code</span></h2>
+        <div class="lanes" id="archLanes"></div>
+        <ul class="arch-notes" id="archNotes"></ul>
+      </article>
+      <article class="card"><h2>Data model</h2><div id="dataModel"></div></article>
+      <article class="card"><h2>Most used code <span class="muted small">— change with care</span></h2><ol class="hot" id="hotList"></ol></article>
+    </div>
+  </section>
+
+  <!-- ============================== EXPLORE ============================== -->
+  <section class="page" id="page-explore">
+    <div class="explore">
+      <aside class="sidebar">
+        <div class="side-block">
+          <label class="side-label" for="searchBox">Find</label>
+          <input id="searchBox" type="search" placeholder="class, method, /route, table…" />
+          <ul id="searchResults" class="results"></ul>
+        </div>
+        <div class="side-block">
+          <span class="side-label">View</span>
+          <div class="seg" id="modeSeg" role="tablist">
+            <button data-mode="architecture" class="on" title="Endpoint → code → database">Architecture</button>
+            <button data-mode="hops" title="Only the selected item and its neighbours">Focus</button>
+            <button data-mode="ecosystem" title="Folders and files">Files</button>
+            <button data-mode="cross-language" title="Calls between services/languages">Services</button>
+          </div>
+          <p class="hint" id="modeHint">Endpoints, the code that handles them and the tables they use.</p>
+          <div class="row"><label>Spread <input id="hops" type="range" min="1" max="3" value="1" /><b id="hopsVal">1</b></label>
+            <label>Max nodes <input id="maxNodes" type="number" min="10" max="600" value="120" /></label></div>
+        </div>
+        <details class="side-block" open>
+          <summary class="side-label">Show / hide</summary>
+          <div id="typeFilters" class="filters"></div>
+          <div id="relFilters" class="filters rels"></div>
+          <div class="row"><label class="chk"><input id="incCand" type="checkbox" checked /> probable links</label>
+            <label class="chk"><input id="edgeLabels" type="checkbox" /> arrow labels</label></div>
+          <button class="link" id="resetFilters">Reset filters</button>
+        </details>
+        <details class="side-block">
+          <summary class="side-label">Ready-made views</summary>
+          <select id="querySel">
+            <option value="apis_and_handlers">Endpoints and their handlers</option>
+            <option value="api_to_database_path">Endpoint → database paths</option>
+            <option value="sql_and_tables">SQL statements and tables</option>
+            <option value="tables_and_columns">Tables, columns, foreign keys</option>
+            <option value="call_graph">Call graph</option>
+            <option value="classes_and_methods">Classes and methods</option>
+            <option value="inheritance">Inheritance / implementations</option>
+            <option value="tests_and_targets">Tests and what they test</option>
+          </select>
+          <button class="btn sm" id="runQuery">Show</button>
+        </details>
+        <details class="side-block">
+          <summary class="side-label">Layout</summary>
+          <select id="layoutSel"><option value="dagre">Left → right (layered)</option><option value="fcose">Clusters (force)</option>
+            <option value="breadthfirst">Tree</option><option value="concentric">Rings</option></select>
+        </details>
+      </aside>
+      <section class="canvas-wrap">
+        <div class="canvas-bar">
+          <div class="crumb" id="viewTitle">Graph</div>
+          <div class="tools">
+            <button class="btn icon" id="fitBtn" title="Fit to screen">⤢</button>
+            <button class="btn icon" id="zoomIn" title="Zoom in">＋</button>
+            <button class="btn icon" id="zoomOut" title="Zoom out">－</button>
+            <button class="btn icon" id="expandBtn" title="Show neighbours of the selected node">⊕</button>
+            <button class="btn icon" id="pngBtn" title="Download picture">⇩</button>
+            <button class="btn icon" id="legendBtn" title="What do shapes and colours mean?">ⓘ</button>
+          </div>
+        </div>
+        <div id="cy" class="cy" aria-label="Knowledge graph"></div>
+        <div id="legend" class="legend-panel hidden"></div>
+        <div id="truncNote" class="note-float hidden"></div>
+        <div class="canvas-hint" id="canvasHint">Click a shape or arrow to see its evidence · double-click to focus · hover to highlight neighbours</div>
+      </section>
+      <aside class="inspector" id="inspector">
+        <div class="insp-empty"><div class="big">⬡</div><b>Nothing selected</b><p>Click a node (shape) or a relationship (arrow) to see what it is, where it is in the code, and the exact lines that prove it.</p></div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ============================== ASK ============================== -->
+  <section class="page" id="page-ask">
+    <div class="ask">
+      <section class="ask-main">
+        <div class="ask-head">
+          <h1>Ask about the code</h1>
+          <p class="sub">Type any question. You get a plain-English answer, a developer answer, the Cypher query and the evidence.</p>
+          <div class="nlp-mode" id="nlpMode"></div>
+        </div>
+        <div class="chat" id="chat"></div>
+        <div class="suggest" id="suggest"></div>
+        <form class="ask-form" id="askForm">
+          <textarea id="question" rows="2" placeholder="e.g. Which tables are touched by POST /owners?   (Enter to send, Shift+Enter for a new line)" aria-label="Question"></textarea>
+          <button class="btn primary lg" type="submit" id="askBtn">Ask</button>
+        </form>
+      </section>
+      <aside class="ask-graph">
+        <div class="canvas-bar"><div class="crumb">Answer on the graph</div><div class="tools"><button class="btn sm" id="askToExplore">Open in Explore ↗</button></div></div>
+        <div id="cyAsk" class="cy"></div>
+        <div class="canvas-hint">Click any item to inspect its evidence</div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ============================== FLOW ============================== -->
+  <section class="page" id="page-flow">
+    <div class="page-head">
+      <div><h1>Request flow</h1><p class="sub">Pick an endpoint to see, step by step, which code runs and which tables are used — from the incoming request to the database.</p></div>
+    </div>
+    <div class="flow">
+      <aside class="card picker">
+        <input id="apiFilter" type="search" placeholder="Filter endpoints…" />
+        <ul id="apiList" class="api-list"></ul>
+      </aside>
+      <section class="card flow-main">
+        <div id="flowHead" class="flow-head muted">Select an endpoint on the left.</div>
+        <div id="cyFlow" class="cy flow-cy"></div>
+        <ol id="flowSteps" class="flow-steps"></ol>
+      </section>
+    </div>
+  </section>
+
+  <!-- ============================== IMPACT ============================== -->
+  <section class="page" id="page-impact">
+    <div class="page-head">
+      <div><h1>Impact analysis</h1><p class="sub">Choose what you plan to change (method, class, table, endpoint, SQL). You get a risk estimate, everything connected to it, the tests to run and possible side effects.</p></div>
+    </div>
+    <div class="impact-pick card">
+      <input id="impactSearch" type="search" placeholder="Search what you will change…  e.g. OwnerRepository.findById, owners, POST /owners" />
+      <ul id="impactResults" class="results inline"></ul>
+    </div>
+    <div id="impactOut" class="impact-out"></div>
+  </section>
+
+  <!-- ============================== QUALITY ============================== -->
+  <section class="page" id="page-quality">
+    <div class="page-head"><div><h1>Analysis quality</h1><p class="sub">How much of the repository was understood, and where the analysis is uncertain.</p></div></div>
+    <div id="qualityOut" class="quality"></div>
+  </section>
 </main>
+
+<!-- ============================== ANALYZE DIALOG ============================== -->
+<dialog id="analyzeDlg" class="dlg">
+  <form method="dialog" id="analyzeForm" class="dlg-body" autocomplete="off">
+    <h2>Analyze a repository</h2>
+    <p class="muted">Public GitHub, GitLab or Bitbucket link. Java, Python, SQL, REST/OpenAPI files are analyzed; other files are ignored.</p>
+    <label>Repository URL<input id="repoUrl" type="text" placeholder="https://github.com/owner/repository" required /></label>
+    <label>Branch or tag <small class="muted">(optional)</small><input id="repoRef" type="text" placeholder="main" /></label>
+    <label class="chk"><input id="force" type="checkbox" /> Re-analyze even if already done for this commit</label>
+    <div id="progressBox" class="progress hidden"><div class="bar"><span id="progressBar"></span></div><div id="progressMsg" class="muted"></div></div>
+    <div class="dlg-actions"><button class="btn" value="cancel" formnovalidate id="cancelAnalyze">Close</button><button class="btn primary" id="analyzeBtn" type="submit">Start analysis</button></div>
+  </form>
+</dialog>
+
+<!-- ============================== HELP DRAWER ============================== -->
+<aside id="help" class="drawer" aria-hidden="true">
+  <div class="drawer-head"><h2>How to use RepoGraph</h2><button class="btn icon" id="helpClose" aria-label="Close help">✕</button></div>
+  <div class="drawer-body">
+    <h3>1 · Analyze</h3><p>Click <b>＋ Analyze repo</b>, paste a public repository link, start. When finished the <b>Overview</b> opens.</p>
+    <h3>2 · Overview</h3><p>Four plain sentences about the repository, its architecture layers, data model and the most used code.</p>
+    <h3>3 · Explore graph</h3><p>Shapes are code parts, arrows are relationships. <b>Click</b> anything to see its file, line and code. <b>Double-click</b> to focus. Use <b>Find</b> to jump to a name. Hide types with <b>Show / hide</b>.</p>
+    <h3>4 · Ask</h3><p>Ask in plain English. Each answer has tabs: <b>Plain English</b>, <b>Developer</b>, <b>Cypher</b>, <b>How it was answered</b> and <b>Evidence</b>.</p>
+    <h3>5 · Request flow</h3><p>Pick an endpoint: see each step from the HTTP request to the database table, with the code location of every step.</p>
+    <h3>6 · Impact</h3><p>Pick what you will change. You get a risk level, affected endpoints/code/tables, tests to run and possible side effects. It is a review checklist, not a guarantee.</p>
+    <h3>Shapes &amp; colours</h3><div id="helpLegend"></div>
+    <h3>Solid vs dashed arrows</h3><p><b>Solid</b> = confirmed by the code. <b>Dashed</b> = probable (good evidence, not 100% proof). Click an arrow to read the reason.</p>
+    <h3>Answer labels</h3>
+    <p><span class="st ANSWERED">ANSWERED</span> from code evidence · <span class="st INSUFFICIENT_EVIDENCE">NOT ENOUGH EVIDENCE</span> exists but no proof of what you asked · <span class="st CLARIFY">CHOOSE ONE</span> several matches · <span class="st NOT_FOUND">NOT FOUND</span> no such name.</p>
+  </div>
+</aside>
+<div id="drawerShade" class="shade hidden"></div>
 
 <script src="/static/vendor/cytoscape.min.js"></script>
 <script src="/static/vendor/dagre.min.js"></script>

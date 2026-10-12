@@ -93,6 +93,9 @@ class GraphStore(ABC):
     def degree(self, gid: str, nid: str) -> int: ...
 
     @abstractmethod
+    def get_edge(self, gid: str, eid: str) -> dict | None: ...
+
+    @abstractmethod
     def diagnostics(self, gid: str) -> dict: ...
 
     @abstractmethod
@@ -266,6 +269,10 @@ class InMemoryStore(GraphStore):
             res.extend(g.rels[i] for i in g.rels_by_type.get(t, []) if not sts or g.rels[i]["status"] in sts)
         res.sort(key=lambda r: (r["type"], r["source"], r["target"]))
         return res[:limit]
+
+    def get_edge(self, gid, eid):
+        g = self._graph(gid)
+        return g.rels.get(eid) if g else None
 
     def degree(self, gid, nid):
         g = self._graph(gid)

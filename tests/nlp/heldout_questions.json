@@ -1,0 +1,191 @@
+[
+ [
+  "can you tell me the location of InventoryClient",
+  [
+   "LOCATE_SYMBOL",
+   "EXPLAIN"
+  ],
+  "InventoryClient.java"
+ ],
+ [
+  "I want to see the source of OrderMapper",
+  [
+   "LOCATE_SYMBOL",
+   "EXPLAIN"
+  ],
+  "OrderMapper"
+ ],
+ [
+  "which functions live inside StockRepository",
+  [
+   "LIST_METHODS"
+  ],
+  "low_stock"
+ ],
+ [
+  "anything calling OrderDao.updateStatus?",
+  [
+   "CALLERS"
+  ],
+  "OrderServiceImpl.cancel"
+ ],
+ [
+  "what invokes get_item",
+  [
+   "CALLERS"
+  ],
+  "get_item",
+  "CLARIFY"
+ ],
+ [
+  "what gets called from OrderServiceImpl.cancel",
+  [
+   "CALLEES"
+  ],
+  "updateStatus"
+ ],
+ [
+  "GET /inventory/items/{sku} is implemented where?",
+  [
+   "API_HANDLER",
+   "LOCATE_SYMBOL"
+  ],
+  "get_item"
+ ],
+ [
+  "which db tables get updated by DELETE /api/orders/{id}",
+  [
+   "API_TO_DATA"
+  ],
+  "orders"
+ ],
+ [
+  "show the schema of warehouses",
+  [
+   "SCHEMA"
+  ],
+  "name"
+ ],
+ [
+  "which parts of the code update stock_events",
+  [
+   "TABLE_USAGE"
+  ],
+  "_log"
+ ],
+ [
+  "what would be affected if the warehouses table changes",
+  [
+   "IMPACT"
+  ],
+  "items"
+ ],
+ [
+  "if I refactor OrderServiceImpl.validate, what's the blast radius",
+  [
+   "IMPACT"
+  ],
+  "POST /api/orders"
+ ],
+ [
+  "do we have tests covering OrderDao.insert",
+  [
+   "TEST_COVERAGE"
+  ],
+  "OrderDao.insert",
+  "INSUFFICIENT_EVIDENCE"
+ ],
+ [
+  "what does OrderController rely on",
+  [
+   "DEPENDENCIES"
+  ],
+  "OrderService"
+ ],
+ [
+  "how does GET /api/orders reach the database",
+  [
+   "FLOW",
+   "API_TO_DATA"
+  ],
+  "orders"
+ ],
+ [
+  "give me the list of REST APIs",
+  [
+   "LIST_APIS"
+  ],
+  "/api/orders"
+ ],
+ [
+  "number of classes in the project",
+  [
+   "COUNT"
+  ],
+  "Class"
+ ],
+ [
+  "list all DAO classes",
+  [
+   "LIST_TYPE"
+  ],
+  "OrderDao"
+ ],
+ [
+  "walk me through the request flow of POST /inventory/reserve",
+  [
+   "FLOW"
+  ],
+  "reserve_stock"
+ ],
+ [
+  "describe what reserve_stock does",
+  [
+   "EXPLAIN"
+  ],
+  "decrement"
+ ],
+ [
+  "which methods are never called",
+  [
+   "UNUSED"
+  ],
+  "legacyExport"
+ ],
+ [
+  "which methods are called the most",
+  [
+   "HOTSPOTS"
+  ],
+  "getQuantity"
+ ],
+ [
+  "endpoints without test coverage",
+  [
+   "UNTESTED"
+  ],
+  "/api/orders"
+ ],
+ [
+  "summarize this codebase",
+  [
+   "SUMMARY"
+  ],
+  "orders"
+ ],
+ [
+  "who calls reserv_stock",
+  [
+   "CALLERS"
+  ],
+  "routes.reserve"
+ ],
+ [
+  "tell me about OrderDaoo",
+  [
+   "LOCATE_SYMBOL",
+   "EXPLAIN"
+  ],
+  "OrderDao"
+ ]
+]

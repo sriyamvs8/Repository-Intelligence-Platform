@@ -92,4 +92,5 @@ APIS = {"api:GET /api/orders", "api:GET /api/orders/{}", "api:POST /api/orders",
 # Must NOT exist (negative tests)
 FORBIDDEN = [
     ("HANDLED_BY", "api:POST /api/refunds", None),          # documented in OpenAPI only
+    ("TESTS", "test:com.shop.web.OrderControllerTest.stubsMockedService()", None),  # only stubs a @Mock
 ]

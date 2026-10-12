@@ -10,12 +10,13 @@ import uuid
 
 from ..config import settings
 from ..graph.queries import CALLABLE_TYPES, GraphQueries, slim_edge, slim_node
+from ..graph.insights import Insights
 from ..graph.store import GraphStore
 from ..kg.model import normalize_route
 from .cypher import (CypherRejected, entity_ids_in_rows, generate_cypher, rows_to_text, scope_rows, template_for,
                      validate_cypher)
 from .gemini import explain_with_gemini, grounded, plan_with_gemini
-from .plan import EntityRef, Intent, QueryPlan, candidate_terms, rule_plan
+from .plan import INTENT_GUIDE, EntityRef, Intent, QueryPlan, rule_plan
 
 log = logging.getLogger("rkg.nlp")
 
@@ -33,10 +34,13 @@ PREFERRED_TYPES = {
     Intent.TEST_COVERAGE: CALLABLE_TYPES + ["Class", "Interface", "RestApi"],
     Intent.LOCATE_SYMBOL: None,
     Intent.PATH: None,
+    Intent.FLOW: ["RestApi"],
+    Intent.EXPLAIN: CALLABLE_TYPES + ["Class", "Interface", "Enum", "Table", "RestApi", "SqlQuery", "Test"],
 }
 # complex analyses answered by reviewed, bounded traversals even when Gemini->Cypher is available
 TEMPLATE_FIRST = {Intent.IMPACT, Intent.API_TO_DATA, Intent.TEST_COVERAGE, Intent.PATH, Intent.TABLE_USAGE,
-                  Intent.DEPENDENCIES, Intent.SUMMARY, Intent.LIST_APIS, Intent.LIST_TABLES}
+                  Intent.DEPENDENCIES, Intent.SUMMARY, Intent.LIST_APIS, Intent.LIST_TABLES, Intent.FLOW,
+                  Intent.UNUSED, Intent.HOTSPOTS, Intent.UNTESTED}
 PRONOUN_RE = re.compile(r"\b(it|its|this|that|them|those|these|same)\b", re.I)
 
 
@@ -65,6 +69,7 @@ class AskEngine:
     def __init__(self, store: GraphStore, gid: str) -> None:
         self.store = store
         self.gid = gid
+        self._notes: list[str] = []
         self.q = GraphQueries(store, gid)
 
     # ------------------------------------------------------------------ entity resolution
@@ -106,13 +111,42 @@ class AskEngine:
             groups = {(n["type"], (n.get("qualified_name") or n["name"]).split("(")[0]) for n in same}
             if len(groups) == 1 or len(same) == 1:
                 return same[:10], []
+            # an interface method and its implementation(s) are one concept: answer for the interface method
+            ids = {n["id"] for n in same}
+            for n in same:
+                impls = {e["source"] for e, o, _ in self.store.neighbors(self.gid, n["id"], "in", ["OVERRIDES"], limit=50)}
+                if impls and (ids - {n["id"]}) <= impls:
+                    self._notes.append(f"'{term}' matches an interface method and its implementation(s); "
+                                       f"answering for {_label(n)} (callers of implementations are included).")
+                    return [n] + [x for x in same if x["id"] != n["id"]], []
             # prefer non-test code when ambiguous between test and production code
             prod = [n for n in same if not n.get("is_test_code")]
             groups = {(n["type"], (n.get("qualified_name") or n["name"]).split("(")[0]) for n in prod}
             if prod and len(groups) == 1:
                 return prod[:10], []
             return [], same[:8]
-        return [], best_cands
+        if best_cands:
+            return [], best_cands
+        # typo tolerance: closest names among entities of the preferred types
+        import difflib
+        pool = self.store.nodes_by_type(self.gid, preferred or ["Class", "Interface", "Method", "Function", "Table",
+                                                                "RestApi", "Test", "Enum"], 50000)
+        names: dict[str, list[dict]] = {}
+        for n in pool:
+            names.setdefault((n.get("name") or "").lower(), []).append(n)
+            q = (n.get("qualified_name") or "").split("(")[0].split(".")
+            if len(q) >= 2:
+                names.setdefault(".".join(q[-2:]).lower(), []).append(n)
+        for term in terms[:4]:
+            if term.startswith("/"):
+                continue
+            close = difflib.get_close_matches(term.lower(), list(names), n=3, cutoff=0.8)
+            if close:
+                hits = names[close[0]]
+                self._notes.append(f"Interpreted '{term}' as '{hits[0]['name']}' (closest name in the repository).")
+                prod = [h for h in hits if not h.get("is_test_code")] or hits
+                return prod[:10], []
+        return [], []
 
     def _resolve_route(self, path: str, method: str | None) -> list[dict]:
         norm = normalize_route(path)
@@ -128,6 +162,7 @@ class AskEngine:
     # ------------------------------------------------------------------ main entry
     def ask(self, question: str, context_entity_id: str | None = None, include_candidates: bool | None = None,
             max_hops: int | None = None) -> dict:
+        self._notes: list[str] = []
         t0 = time.time()
         qid = uuid.uuid4().hex[:12]
         question = (question or "").strip()[:1000]
@@ -182,6 +217,31 @@ class AskEngine:
             elif llm:
                 resp["limitations"].append("LLM explanation discarded: it mentioned entities not present in the graph results.")
         resp.setdefault("cypher", None)
+        if self._notes:
+            resp["limitations"] = self._notes + resp["limitations"]
+        resp["answer_dev"] = resp["answer"]
+        if not resp.get("answer_nl"):
+            resp["answer_nl"] = resp.get("explanation") or (_compose_nl(plan.intent.value, resp) if resp["status"] == "ANSWERED" else None) \
+                or _plain(resp["answer"], resp["status"])
+        it = plan.intent.value
+        ents = resp.get("resolved_entities") or []
+        status_meaning = {"ANSWERED": "answer built only from facts found in the code graph",
+                          "INSUFFICIENT_EVIDENCE": "the entity exists but the graph has no evidence for what was asked",
+                          "NOT_FOUND": "no entity with that name exists in the analyzed repository",
+                          "CLARIFY": "several entities match; you must choose one",
+                          "UNSUPPORTED": "the question is outside what the code graph can answer"}
+        cy = resp.get("cypher") or {}
+        resp["breakdown"] = [
+            {"step": "Understood the question", "detail": f"{INTENT_GUIDE.get(it, it)}  →  intent {it} (planner: {planner})"},
+            {"step": "Identified entities", "detail": ", ".join(f"{e.get('type')} {e.get('name')}" for e in ents[:6])
+             or ("not needed for this question" if it in ("SUMMARY", "COUNT", "LIST_TYPE", "LIST_APIS", "LIST_TABLES",
+                                                         "UNUSED", "HOTSPOTS", "UNTESTED") else "none matched"),
+             "notes": list(self._notes)},
+            {"step": "Built the graph query", "detail": (cy.get("source") or "reviewed traversal") +
+             (" — executed on Neo4j" if cy.get("executed") else " — equivalent Cypher shown")},
+            {"step": "Retrieved evidence", "detail": f"{len(resp['facts'])} fact(s) with file/line evidence"},
+            {"step": "Composed the answer", "detail": f"{resp['status']}: {status_meaning.get(resp['status'], '')}"},
+        ]
         resp.update({"question_id": qid, "question": question, "planner": planner,
                      "query_plan": plan.model_dump(mode="json"), "elapsed_ms": int((time.time() - t0) * 1000)})
         log.info("ask qid=%s intent=%s status=%s planner=%s facts=%d ms=%d", qid, plan.intent.value, resp["status"],
@@ -243,8 +303,8 @@ class AskEngine:
                         f"({attempts[-1]['error'][:120] if attempts else 'unknown'}); answered with reviewed traversal."}
 
     def _result(self, status: str, answer: str, facts=None, entities=None, paths=None, graph=None,
-                limitations=None, candidates=None, resolved=None) -> dict:
-        return {"status": status, "answer": answer, "facts": facts or [], "entities": entities or [],
+                limitations=None, candidates=None, resolved=None, nl: str | None = None) -> dict:
+        return {"status": status, "answer": answer, "answer_nl": nl, "facts": facts or [], "entities": entities or [],
                 "paths": paths or [], "graph": graph or {"nodes": [], "edges": []}, "limitations": limitations or [],
                 "candidates": candidates or [], "resolved_entities": resolved or []}
 
@@ -259,6 +319,16 @@ class AskEngine:
                                 "touches, what is impacted by a change, or which tests cover something.")
         if it == Intent.SUMMARY:
             return self._summary()
+        if it == Intent.COUNT:
+            return self._count(plan)
+        if it == Intent.LIST_TYPE:
+            return self._list_type(plan)
+        if it == Intent.UNUSED:
+            return self._unused(plan)
+        if it == Intent.HOTSPOTS:
+            return self._hotspots(plan)
+        if it == Intent.UNTESTED:
+            return self._untested(plan)
         if it == Intent.LIST_APIS:
             return self._list_apis(plan.limit)
         if it == Intent.LIST_TABLES:
@@ -526,28 +596,41 @@ class AskEngine:
                             facts, resolved, graph={"nodes": res["nodes"], "edges": res["edges"]}, resolved=resolved)
 
     def _i_impact(self, nodes, plan, resolved):
-        res = self.q.impact_of(nodes[0]["id"], depth=plan.max_hops, include_candidates=plan.include_candidates)
-        nodemap = {n["id"]: n for n in res["nodes"]}
-        facts = []
-        for grp in res["affected"].values():
-            for row in grp:
-                e = row["via"]
-                if e["source"] in nodemap and e["target"] in nodemap:
-                    facts.append(_fact(e, nodemap[e["source"]], nodemap[e["target"]]))
-        if not res["total_affected"]:
-            return self._result("INSUFFICIENT_EVIDENCE", f"No dependents of `{_label(nodes[0])}` were found in the graph "
-                                f"(within {plan.max_hops} hops).", resolved=resolved, graph=self._graph_of(nodes, []))
+        rep = self._ins().impact_report(nodes[0]["id"], depth=max(plan.max_hops, 3), include_candidates=plan.include_candidates)
+        items, pot = rep["items"], rep["potential"]
+        if not items and not pot:
+            return self._result("INSUFFICIENT_EVIDENCE", f"No dependents of `{_label(nodes[0])}` were found in the graph.",
+                                resolved=resolved, graph=self._graph_of(nodes, []),
+                                nl=f"Nothing in the repository depends on {_label(nodes[0])} according to the code graph. "
+                                   "It may still be used via reflection, configuration or from outside the repository.")
+        dev = [f"Risk: **{rep['risk_level']}** · blast radius {rep['blast_radius']}/100 · "
+               f"{rep['counts']['apis']} API(s), {rep['counts']['code']} code item(s), {rep['counts']['tests']} test(s), "
+               f"{rep['counts']['potential']} potential"]
         order = ["RestApi", "Method", "Function", "Constructor", "Class", "Interface", "SqlQuery", "Table", "Test"]
-        lines = [f"If `{_label(nodes[0])}` changes, {res['total_affected']} connected entities may need review:"]
-        for typ in order + [t for t in res["affected"] if t not in order]:
-            grp = res["affected"].get(typ)
-            if not grp:
-                continue
-            names = ", ".join(f"`{_label(r['node'])}`" for r in grp[:10])
-            lines.append(f"- {typ} ({len(grp)}): {names}{' …' if len(grp) > 10 else ''}")
-        return self._result("ANSWERED", "\n".join(lines), facts, resolved, graph={"nodes": res["nodes"], "edges": res["edges"]},
-                            limitations=["Impact = connected under static dependency rules (callers, handlers, tests, data access). "
-                                         "It is a review aid, not a guarantee that these will break."], resolved=resolved)
+        by_type: dict[str, list] = {}
+        for i in items:
+            by_type.setdefault(i["node"]["type"], []).append(i)
+        for typ in order + [t for t in by_type if t not in order]:
+            grp = by_type.get(typ)
+            if grp:
+                dev.append(f"- {typ} ({len(grp)}): " + ", ".join(f"`{_label(i['node'])}` [{i['risk']}]" for i in grp[:10])
+                           + (" …" if len(grp) > 10 else ""))
+        if pot:
+            dev.append(f"- Potential (heuristic, {len(pot)}): " + ", ".join(f"`{_label(p['node'])}`" for p in pot[:6]))
+        facts = []
+        nodemap = {n["id"]: n for n in rep["graph"]["nodes"]}
+        for i in items:
+            e = i["via"]
+            if e["source"] in nodemap and e["target"] in nodemap:
+                f = _fact(e, nodemap[e["source"]], nodemap[e["target"]])
+                f["risk"] = i["risk"]
+                facts.append(f)
+        nl = rep["summary"] + " " + " ".join(rep["recommendations"])
+        res = self._result("ANSWERED", "\n".join(dev), facts, resolved, graph=rep["graph"],
+                           limitations=[rep["model"]["disclaimer"]], resolved=resolved, nl=nl)
+        res["impact"] = {k: rep[k] for k in ("risk_level", "blast_radius", "counts", "recommendations", "untested_apis",
+                                             "tables_touched", "model")}
+        return res
 
     def _i_test_coverage(self, nodes, plan, resolved):
         if nodes[0]["type"] in ("Class", "Interface", "Enum"):
@@ -593,19 +676,16 @@ class AskEngine:
                             graph={"nodes": res["nodes"], "edges": res["edges"]}, resolved=resolved)
 
     def _summary(self):
-        s = self.q.summary()
-        rep = s["report"]
-        m = s["meta"]
-        lines = [f"Repository `{m.get('repo_key')}` @ {(m.get('commit') or '')[:10]} — {rep.get('total_entities', 0)} entities, "
-                 f"{rep.get('total_relationships', 0)} relationships.",
-                 "Entities: " + ", ".join(f"{k} {v}" for k, v in rep.get("entity_counts", {}).items() if k not in ("Directory",)),
-                 f"REST endpoints: {rep.get('apis_total', 0)} ({rep.get('apis_with_handler', 0)} with a resolved handler)."]
-        if s["tables"]:
-            lines.append("Tables: " + ", ".join(f"`{t['name']}`" for t in s["tables"][:20]))
-        if s["most_called"]:
-            lines.append("Most-called code: " + ", ".join(f"`{_label(h['node'])}` ({h['callers']})" for h in s["most_called"][:5]))
-        facts = [{"subject": m.get("repo_key"), "relationship": "SUMMARY", "object": k, "value": v} for k, v in rep.get("entity_counts", {}).items()]
-        return self._result("ANSWERED", "\n".join(lines), facts)
+        prof = self._ins().repo_profile()
+        arch = prof["architecture"]
+        dev = ["**About**"] + [f"- {l}" for l in prof["summary_lines"]] + ["", "**Architecture**"] + \
+              [f"- {l['layer']} ({l['count']}): " + ", ".join(f"`{e}`" for e in l["examples"][:4]) for l in arch["layers"]] + \
+              ["", "Technology: " + ", ".join(arch["frameworks"]), "Modules: " + (", ".join(arch["modules"]) or "single module")]
+        facts = [{"subject": l["layer"], "relationship": "LAYER_COUNT", "object": str(l["count"]),
+                  "evidence": ", ".join(l["examples"])} for l in arch["layers"]]
+        res = self._result("ANSWERED", "\n".join(dev), facts, nl=" ".join(prof["summary_lines"]))
+        res["profile"] = prof
+        return res
 
     def _list_apis(self, limit):
         apis = self.store.nodes_by_type(self.gid, ["RestApi"], 1000)
@@ -628,3 +708,350 @@ class AskEngine:
         lines = [f"- `{t['name']}`{' (schema defined)' if t.get('defined_in_schema') else ''}" for t in ts[:max(limit, 50)]]
         facts = [{"subject": t["name"], "subject_id": t["id"], "relationship": "IS_TABLE", "source_file": t.get("file")} for t in ts]
         return self._result("ANSWERED", f"{len(ts)} table(s):\n" + "\n".join(lines), facts, graph=self._graph_of(ts[:100], []))
+
+
+    # ------------------------------------------------------------------ new intents (no entity needed)
+    def _ins(self) -> Insights:
+        return Insights(self.store, self.gid)
+
+    def _count(self, plan):
+        rep = (self.store.get_meta(self.gid) or {}).get("report", {})
+        ec = rep.get("entity_counts", {})
+        sub = plan.subject or "All"
+        if sub in ("Controller", "Service", "Data access", "Model"):
+            prof = self._ins().repo_profile()
+            n = next((l["count"] for l in prof["architecture"]["layers"] if l["layer"] == sub), 0)
+            nl = f"There are {n} {sub.lower()} component(s) in this repository."
+            return self._result("ANSWERED", f"{sub} components: **{n}**", [{"subject": sub, "relationship": "COUNT", "object": str(n)}], nl=nl)
+        if sub == "Method":
+            n = ec.get("Method", 0) + ec.get("Function", 0) + ec.get("Constructor", 0)
+            return self._result("ANSWERED", f"Methods/functions: **{n}** (Method {ec.get('Method', 0)}, Function {ec.get('Function', 0)}, Constructor {ec.get('Constructor', 0)})",
+                                [{"subject": "Method", "relationship": "COUNT", "object": str(n)}],
+                                nl=f"The code has {n} methods and functions.")
+        if sub == "All" or sub not in ec:
+            lines = [f"- {k}: {v}" for k, v in sorted(ec.items(), key=lambda x: -x[1]) if k not in ("Directory",)]
+            return self._result("ANSWERED", "Entity counts:\n" + "\n".join(lines),
+                                [{"subject": k, "relationship": "COUNT", "object": str(v)} for k, v in ec.items()],
+                                nl=f"The graph holds {rep.get('total_entities', 0)} code entities and {rep.get('total_relationships', 0)} relationships; "
+                                   f"for example {ec.get('RestApi', 0)} endpoints, {ec.get('Table', 0)} tables and {ec.get('Test', 0)} tests.")
+        n = ec.get(sub, 0)
+        word = {"RestApi": "REST endpoints", "Table": "database tables", "Test": "tests", "Class": "classes",
+                "Interface": "interfaces", "SqlQuery": "SQL statements", "Column": "table columns", "File": "files"}.get(sub, sub)
+        return self._result("ANSWERED", f"{word}: **{n}**", [{"subject": sub, "relationship": "COUNT", "object": str(n)}],
+                            nl=f"There are {n} {word} in this repository.")
+
+    def _list_type(self, plan):
+        sub = plan.subject or "Class"
+        ins = self._ins()
+        if sub in ("Controller", "Service", "Data access", "Model"):
+            pool = [c for c in self.store.nodes_by_type(self.gid, ["Class", "Interface"], 20000) if not c.get("is_test_code")]
+            items = [c for c in pool if ins.layer(c) == sub]
+            if sub == "Controller":
+                for h in self.store.get_nodes(self.gid, list(ins.handler_ids())[:2000]):
+                    if h["type"] == "Function" and not h.get("class") and h not in items:
+                        items.append(h)
+        elif sub == "Method":
+            items = self.store.nodes_by_type(self.gid, ["Method", "Function"], 5000)
+        else:
+            items = self.store.nodes_by_type(self.gid, [sub], 5000)
+        if not items:
+            return self._result("INSUFFICIENT_EVIDENCE", f"No {sub} components were found.", nl=f"I could not find any {sub.lower()} components.")
+        lines = [f"- `{_label(n)}` — {_loc(n)}" for n in items[:max(plan.limit, 40)]]
+        more = f"\n…and {len(items) - len(lines)} more" if len(items) > len(lines) else ""
+        facts = [{"subject": _label(n), "subject_id": n["id"], "relationship": "IS_A", "object": sub,
+                  "source_file": n.get("file"), "line": n.get("line")} for n in items[:200]]
+        return self._result("ANSWERED", f"{len(items)} {sub} component(s):\n" + "\n".join(lines) + more, facts,
+                            graph=self._graph_of(items[:80], []),
+                            nl=f"The repository has {len(items)} {sub.lower()} component(s), for example "
+                               f"{', '.join(_label(n) for n in items[:4])}.")
+
+    def _call_index(self):
+        incoming: dict[str, int] = {}
+        for t in ("CALLS", "HANDLED_BY", "TESTS", "HTTP_CALLS", "CROSS_LANGUAGE_MAP"):
+            for e in self.store.rels_by_type(self.gid, [t], limit=500000):
+                incoming[e["target"]] = incoming.get(e["target"], 0) + (1 if t == "CALLS" else 0) or incoming.get(e["target"], 0) or 0
+                if t != "CALLS":
+                    incoming.setdefault(e["target"], 0)
+        return incoming
+
+    def _unused(self, plan):
+        used = set()
+        for t in ("CALLS", "HANDLED_BY", "TESTS", "HTTP_CALLS", "CROSS_LANGUAGE_MAP", "INSTANTIATES"):
+            used |= {e["target"] for e in self.store.rels_by_type(self.gid, [t], limit=500000)}
+        overriding = {e["source"] for e in self.store.rels_by_type(self.gid, ["OVERRIDES"], limit=500000)}
+        overridden = {e["target"] for e in self.store.rels_by_type(self.gid, ["OVERRIDES"], limit=500000)}
+        cands = []
+        for m in self.store.nodes_by_type(self.gid, ["Method", "Function"], 100000):
+            if m.get("is_test_code") or m["id"] in used or m["id"] in overriding:
+                continue
+            if m["id"] in overridden and any(o in used for o in ()):
+                continue
+            nm = m.get("name") or ""
+            if nm.startswith("__") or nm in ("main", "toString", "hashCode", "equals", "run", "setUp", "configure"):
+                continue
+            cands.append(m)
+        if not cands:
+            return self._result("ANSWERED", "No uncalled methods found.", nl="Every method is called from somewhere in the repository.")
+        lines = [f"- `{_label(m)}` — {_loc(m)}" for m in cands[:max(plan.limit, 40)]]
+        facts = [{"subject": _label(m), "subject_id": m["id"], "relationship": "NO_INCOMING_CALLS", "object": "",
+                  "source_file": m.get("file"), "line": m.get("line")} for m in cands[:200]]
+        return self._result("ANSWERED", f"{len(cands)} method(s) with no callers, handlers or tests in the repository:\n" + "\n".join(lines)
+                            + (f"\n…and {len(cands) - len(lines)} more" if len(cands) > len(lines) else ""), facts,
+                            graph=self._graph_of(cands[:60], []),
+                            limitations=["'Unused' = no static reference inside this repository. Framework callbacks, reflection, "
+                                         "getters used by serializers/templates and public library APIs can still be used."],
+                            nl=f"{len(cands)} methods are never called from other code in this repository (possible dead code), "
+                               f"e.g. {', '.join(_label(m) for m in cands[:3])}. Check framework/reflection use before deleting them.")
+
+    def _hotspots(self, plan):
+        indeg: dict[str, int] = {}
+        for e in self.store.rels_by_type(self.gid, ["CALLS"], limit=500000):
+            indeg[e["target"]] = indeg.get(e["target"], 0) + 1
+        top = sorted(indeg.items(), key=lambda x: -x[1])[:max(10, min(plan.limit, 25))]
+        nodes = self.store.get_nodes(self.gid, [t for t, _ in top])
+        nm = {n["id"]: n for n in nodes}
+        lines, facts = [], []
+        for tid, c in top:
+            n = nm.get(tid)
+            if not n:
+                continue
+            lines.append(f"- `{_label(n)}` — called from {c} place(s) — {_loc(n)}")
+            facts.append({"subject": _label(n), "subject_id": tid, "relationship": "CALLED_BY_COUNT", "object": str(c),
+                          "source_file": n.get("file"), "line": n.get("line")})
+        if not lines:
+            return self._result("INSUFFICIENT_EVIDENCE", "No resolved calls in this repository.", nl="No call relationships were found.")
+        return self._result("ANSWERED", "Most-called methods (hotspots):\n" + "\n".join(lines), facts,
+                            graph=self._graph_of(nodes, []),
+                            nl=f"The most heavily used code is {facts[0]['subject']} (called from {facts[0]['object']} places)"
+                               + (f", followed by {facts[1]['subject']} and {facts[2]['subject']}" if len(facts) > 2 else "")
+                               + ". Changes there have the widest effect — test them carefully.")
+
+    def _untested(self, plan):
+        apis = self.store.nodes_by_type(self.gid, ["RestApi"], 5000)
+        tested = {e["target"] for e in self.store.rels_by_type(self.gid, ["TESTS"], limit=500000)}
+        handlers = {}
+        for e in self.store.rels_by_type(self.gid, ["HANDLED_BY"], limit=500000):
+            handlers.setdefault(e["source"], []).append(e["target"])
+        untested = [a for a in apis if a["id"] not in tested and not any(h in tested for h in handlers.get(a["id"], []))]
+        if not apis:
+            return self._result("INSUFFICIENT_EVIDENCE", "No endpoints in this repository.", nl="This repository exposes no REST endpoints.")
+        lines = [f"- `{a['name']}` → `{_label(self.store.get_node(self.gid, handlers[a['id']][0]))}`" if handlers.get(a["id"]) else f"- `{a['name']}`"
+                 for a in untested[:max(plan.limit, 50)]]
+        facts = [{"subject": a["name"], "subject_id": a["id"], "relationship": "NO_TESTS", "object": "",
+                  "source_file": a.get("file"), "line": a.get("line")} for a in untested]
+        return self._result("ANSWERED", f"{len(untested)} of {len(apis)} endpoint(s) have no test (directly or through their handler):\n"
+                            + "\n".join(lines), facts, graph=self._graph_of(untested[:80], []),
+                            nl=f"{len(untested)} of {len(apis)} endpoints have no automated test that calls them or their handler"
+                               + (f", e.g. {', '.join(a['name'] for a in untested[:3])}." if untested else "."))
+
+    # ------------------------------------------------------------------ flow & explain
+    def _i_flow(self, nodes, plan, resolved):
+        api = next((n for n in nodes if n["type"] == "RestApi"), None)
+        if not api:
+            return self._i_explain(nodes, plan, resolved)
+        fl = self._ins().request_flow(api["id"], plan.include_candidates)
+        lines = [f"{s['n']}. [{s['layer']}] {s['text']}" for s in fl["steps"][:30]]
+        facts = [{"subject": s["text"], "relationship": s["layer"], "object": "", "evidence": s.get("dev"),
+                  "validation_status": s.get("status", "VERIFIED"), "subject_id": s.get("node")} for s in fl["steps"]]
+        tables = ", ".join(fl["tables"]) or "no database table"
+        byid = {n["id"]: n for n in fl["nodes"]}
+        chain = []
+        for layer in ("Controller", "Service", "Data access"):
+            lane = next((l for l in fl["lanes"] if l["layer"] == layer and l["nodes"]), None)
+            if lane:
+                n = byid.get(lane["nodes"][0]) if isinstance(lane["nodes"][0], str) else lane["nodes"][0]
+                if n:
+                    chain.append(f"{layer.lower()} {_short(n)}")
+        route = f" through the {', then the '.join(chain)}" if chain else ""
+        nl = (f"When a client calls {api['name']}, the request goes{route}, and finally reaches {tables}. "
+              f"{len(fl['steps'])} evidence-backed steps are listed below.")
+        res = self._result("ANSWERED", "\n".join(lines), facts, resolved, graph={"nodes": fl["nodes"], "edges": fl["edges"]},
+                           resolved=resolved, nl=nl)
+        res["flow"] = fl
+        return res
+
+    def _i_explain(self, nodes, plan, resolved):
+        n = nodes[0]
+        ins = self._ins()
+        layer = ins.layer(n)
+        sts = ["VERIFIED", "CANDIDATE"] if plan.include_candidates else ["VERIFIED"]
+        nb = self.store.neighbors(self.gid, n["id"], "both", None, sts, limit=400)
+        incoming = [(e, o) for e, o, d in nb if d == "in" and e["type"] in ("CALLS", "HANDLED_BY", "HTTP_CALLS", "CROSS_LANGUAGE_MAP", "INSTANTIATES")]
+        outgoing = [(e, o) for e, o, d in nb if d == "out" and e["type"] in ("CALLS", "EXECUTES", "READS", "WRITES", "HTTP_CALLS", "INSTANTIATES", "HANDLED_BY")]
+        members = [(e, o) for e, o, d in nb if d == "out" and e["type"] == "DEFINES"]
+        tests = [(e, o) for e, o, d in nb if d == "in" and e["type"] == "TESTS"]
+        owner = next((o for e, o, d in nb if d == "in" and e["type"] == "DEFINES"), None)
+        data = self.q.traverse(n["id"], "out", ["CALLS", "EXECUTES", "READS", "WRITES", "DEFINES"] if n["type"] in ("Class", "Interface") else
+                               ["CALLS", "EXECUTES", "READS", "WRITES"], 4, plan.include_candidates, 300)
+        tables = sorted({self.store.get_node(self.gid, nid)["name"] for nid, (p, e) in data["parent"].items() if e["type"] in ("READS", "WRITES")})
+        imp = self.q.impact_of(n["id"], 3, plan.include_candidates, max_nodes=200)
+        apis = [r["node"]["name"] for r in imp["affected"].get("RestApi", [])]
+        kind = {"Method": "method", "Function": "function", "Constructor": "constructor", "Class": "class", "Interface": "interface",
+                "Table": "database table", "RestApi": "REST endpoint", "SqlQuery": "SQL statement", "Test": "test", "Enum": "enum"}.get(n["type"], n["type"])
+        parts = [f"{_label(n)} is a {kind}" + (f" in the {layer.lower()} layer" if layer not in ("Other", "API", "Database", "SQL", "Test") else "")
+                 + (f", defined in {_label(owner)}" if owner and owner["type"] != "File" else "") + f" ({_loc(n)})."]
+        if n.get("docstring") or n.get("summary"):
+            parts.append(f"Its documentation says: “{(n.get('docstring') or n.get('summary'))[:200]}”.")
+        if members:
+            parts.append(f"It contains {len(members)} member(s) such as {', '.join(o['name'] for e, o in members[:5])}.")
+        if incoming:
+            parts.append(f"It is used by {len(incoming)} place(s), e.g. {', '.join(_label(o) for e, o in incoming[:3])}.")
+        elif n["type"] in CALLABLE_TYPES:
+            parts.append("Nothing in the repository calls it directly (it may be invoked by a framework).")
+        if outgoing:
+            parts.append(f"It uses {', '.join(_label(o) for e, o in outgoing[:4])}{' and more' if len(outgoing) > 4 else ''}.")
+        if tables:
+            parts.append(f"Directly or indirectly it works with the table(s) {', '.join(tables[:6])}.")
+        if apis:
+            parts.append(f"It is reachable from {len(apis)} endpoint(s), e.g. {', '.join(apis[:3])}.")
+        parts.append(f"It is covered by {len(tests)} test(s)." if tests else "No test targets it directly.")
+        dev = [f"**{_label(n)}** · {n['type']} · layer: {layer} · {_loc(n)}", f"id: `{n['id']}`"]
+        if n.get("signature"):
+            dev.append(f"signature: `{n['signature']}`")
+        for title, rows in (("used by", incoming), ("uses", outgoing), ("members", members), ("tests", tests)):
+            if rows:
+                dev.append(f"{title} ({len(rows)}): " + ", ".join(f"`{_label(o)}`" for e, o in rows[:12]))
+        if tables:
+            dev.append("tables reached: " + ", ".join(f"`{t}`" for t in tables))
+        if apis:
+            dev.append("endpoints reaching it: " + ", ".join(f"`{a}`" for a in apis[:10]))
+        facts = [_fact(e, o, n) for e, o in incoming[:30]] + [_fact(e, n, o) for e, o in outgoing[:30]] + \
+                [_fact(e, n, o) for e, o in members[:30]] + [_fact(e, o, n) for e, o in tests[:20]]
+        facts.insert(0, {"subject": _label(n), "subject_id": n["id"], "relationship": "LOCATED_AT", "object": _loc(n),
+                         "source_file": n.get("file"), "line": n.get("line"), "validation_status": "VERIFIED"})
+        g_nodes = [n] + [o for e, o in incoming[:20] + outgoing[:20] + members[:20] + tests[:10]]
+        g_edges = [e for e, o in incoming[:20] + outgoing[:20] + members[:20] + tests[:10]]
+        return self._result("ANSWERED", "\n".join(dev), facts, resolved, graph=self._graph_of(g_nodes, g_edges),
+                            resolved=resolved, nl=" ".join(parts))
+
+
+def _plain(answer: str, status: str) -> str:
+    """Fallback plain-English rendering of a developer answer."""
+    text = re.sub(r"`([^`]+)`", r"\1", answer or "")
+    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+    lines = [l.strip(" -•") for l in text.splitlines() if l.strip()]
+    if not lines:
+        return ""
+    head = lines[0].rstrip(":")
+    rest = [l for l in lines[1:] if l]
+    if rest:
+        shown = "; ".join(rest[:4])
+        return f"{head}: {shown}" + (f" (and {len(rest) - 4} more)." if len(rest) > 4 else ".")
+    return head
+
+
+def _names(xs, n=4) -> str:
+    xs = list(dict.fromkeys(x for x in xs if x))
+    if not xs:
+        return ""
+    if len(xs) > n:
+        return ", ".join(xs[:n]) + f" and {len(xs) - n} more"
+    return xs[0] if len(xs) == 1 else ", ".join(xs[:-1]) + " and " + xs[-1]
+
+
+def _compose_nl(intent: str, r: dict) -> str | None:
+    """Turn the retrieved facts into plain English sentences (no new information is added)."""
+    facts = [f for f in r.get("facts", []) if isinstance(f, dict)]
+    ents = r.get("resolved_entities") or []
+    who = _label(ents[0]) if ents else "it"
+    if intent == "API_HANDLER":
+        hs = [f for f in facts if f.get("relationship") == "HANDLED_BY"]
+        if hs:
+            return " ".join(f"{f['subject']} is handled by {f['object']} ({f.get('source_file')}:{f.get('line')})." for f in hs[:3])
+    if intent in ("API_TO_DATA", "SQL_TABLES"):
+        paths = r.get("paths") or []
+        g = {n["id"]: n for n in (r.get("graph") or {}).get("nodes", [])}
+        writes = sorted({p["table"] for p in paths if p.get("operation") == "WRITES"})
+        reads = sorted({p["table"] for p in paths if p.get("operation") == "READS"})
+        if not paths:
+            writes = sorted({f["object"] for f in facts if f.get("relationship") == "WRITES"})
+            reads = sorted({f["object"] for f in facts if f.get("relationship") == "READS"})
+        parts = []
+        if writes:
+            parts.append(f"writes to {_names(writes)}")
+        if reads:
+            parts.append(f"reads from {_names(reads)}")
+        if not parts:
+            return None
+        s = f"{who} {' and '.join(parts)}."
+        if paths:
+            mids = [_label(g[n]) for n in paths[0]["nodes"][1:-1] if n in g and g[n]["type"] != "SqlQuery"]
+            if mids:
+                s += f" The request goes through {' → '.join(mids[:6])}{' …' if len(mids) > 6 else ''}."
+        cand = any(p.get("status") == "CANDIDATE" for p in paths)
+        if cand:
+            s += " Some links on the way are probable rather than confirmed."
+        return s
+    if intent == "CALLERS":
+        callers = [f["subject"] for f in facts if f.get("relationship") in ("CALLS", "HANDLED_BY", "HTTP_CALLS", "CROSS_LANGUAGE_MAP", "INSTANTIATES")]
+        tests = [f["subject"] for f in facts if f.get("relationship") == "TESTS"]
+        apis = [f["subject"] for f in facts if f.get("relationship") == "HANDLED_BY"]
+        s = f"{who} is used by {len(set(callers))} place(s): {_names(callers)}." if callers else f"No code calls {who} directly."
+        if apis:
+            s += f" It handles the endpoint(s) {_names(apis)}."
+        if tests:
+            s += f" {len(set(tests))} test(s) call it, e.g. {_names(tests, 2)}."
+        return s
+    if intent == "CALLEES":
+        calls = [f["object"] for f in facts if f.get("relationship") == "CALLS"]
+        data = [f"{'writes' if f['relationship'] == 'WRITES' else 'reads'} {f['object']}" for f in facts if f.get("relationship") in ("READS", "WRITES")]
+        sql = [f["object"] for f in facts if f.get("relationship") == "EXECUTES"]
+        s = f"{who} calls {_names(calls)}." if calls else f"{who} does not call other code in the repository."
+        if sql:
+            s += f" It runs SQL ({_names(sql, 3)})."
+        if data:
+            s += f" It {_names(data, 3)}."
+        return s
+    if intent == "SCHEMA":
+        cols = [f["object"] for f in facts if f.get("relationship") == "HAS_COLUMN"]
+        fks = [f["object"] for f in facts if f.get("relationship") == "FOREIGN_KEY" and f.get("subject") == who]
+        cls = [f["subject"] for f in facts if f.get("relationship") == "MAPS_TO"]
+        s = f"Table {who} has {len(cols)} column(s): {_names(cols, 8)}." if cols else f"Table {who} has no extracted columns."
+        if fks:
+            s += f" It references {_names(fks)}."
+        if cls:
+            s += f" In code it is represented by the class {_names(cls)}."
+        return s
+    if intent == "TABLE_USAGE":
+        w = [f["subject"] for f in facts if f.get("relationship") == "WRITES" and f.get("subject_type") != "SqlQuery"]
+        rd = [f["subject"] for f in facts if f.get("relationship") == "READS" and f.get("subject_type") != "SqlQuery"]
+        ex = [f["subject"] for f in facts if f.get("relationship") == "EXECUTES"]
+        parts = []
+        if w or rd or ex:
+            parts.append(f"Table {who} is used by {_names(ex + w + rd)}.")
+        else:
+            parts.append(f"Only SQL scripts touch table {who}; no application code accesses it.")
+        return " ".join(parts)
+    if intent == "TEST_COVERAGE":
+        direct = [f["subject"] for f in facts if f.get("relationship") == "TESTS" and not f.get("indirect_via")]
+        ind = [f["subject"] for f in facts if f.get("indirect_via")]
+        s = f"{who} is tested directly by {len(set(direct))} test(s){': ' + _names(direct, 3) if direct else ''}."
+        if ind:
+            s += f" {len(set(ind))} more test(s) exercise it indirectly through its callers or endpoints."
+        return s
+    if intent == "DEPENDENCIES":
+        deps = [f["object"] for f in facts]
+        return f"{who} depends on {_names(deps, 6)}." if deps else None
+    if intent == "PATH":
+        chain = [facts[0]["subject"]] + [f["object"] for f in facts] if facts else []
+        return f"They are connected in {len(facts)} step(s): {' → '.join(chain)}." if chain else None
+    if intent == "LOCATE_SYMBOL":
+        locs = [f for f in facts if f.get("relationship") == "LOCATED_AT"]
+        if locs:
+            return " ".join(f"{f['subject']} is in {f['object']}." for f in locs[:3])
+    if intent == "LIST_METHODS":
+        ms = [f["object"] for f in facts]
+        return f"{who} contains {len(ms)} member(s): {_names(ms, 8)}." if ms else None
+    if intent == "LIST_APIS":
+        return f"The application exposes {len(facts)} REST endpoint(s), for example {_names([f['subject'] for f in facts], 4)}."
+    if intent == "LIST_TABLES":
+        return f"The repository works with {len(facts)} database table(s): {_names([f['subject'] for f in facts], 8)}."
+    return None
+
+
+def _short(n: dict) -> str:
+    q = n.get("qualified_name") or n.get("name") or "?"
+    if n.get("type") in ("Method", "Function", "Constructor"):
+        parts = q.split("(")[0].split(".")
+        return ".".join(parts[-2:]) + "()"
+    return n.get("name") or q

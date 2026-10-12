@@ -13,11 +13,12 @@ SEMANTIC = [r.value for r in RelType if r not in (R.CONTAINS, R.DEFINES)]
 # Edge types along which "X depends on Y" (edge X -> Y). Used reversed for impact analysis.
 DEPENDENCY_EDGES = [R.CALLS.value, R.IMPORTS.value, R.EXTENDS.value, R.IMPLEMENTS.value, R.INSTANTIATES.value,
                     R.EXECUTES.value, R.READS.value, R.WRITES.value, R.HANDLED_BY.value, R.TESTS.value,
-                    R.MAPS_TO.value, R.HTTP_CALLS.value, R.CROSS_LANGUAGE_MAP.value, R.OVERRIDES.value]
+                    R.MAPS_TO.value, R.HTTP_CALLS.value, R.CROSS_LANGUAGE_MAP.value, R.OVERRIDES.value,
+                    R.FOREIGN_KEY.value]
 CALLABLE_TYPES = ["Method", "Function", "Constructor"]
 VALID_STATUSES = ["VERIFIED", "CANDIDATE"]
 
-NODE_FIELDS = ("module", "api_count", "apis", "id", "type", "name", "qualified_name", "file", "line", "end_line", "language", "http_method",
+NODE_FIELDS = ("class", "annotations", "module", "api_count", "apis", "id", "type", "name", "qualified_name", "file", "line", "end_line", "language", "http_method",
                "path", "operation", "data_type", "primary_key", "signature", "sql", "documented", "is_test_code",
                "parse_status", "summary", "spring_data_repository")
 EDGE_FIELDS = ("id", "source", "target", "type", "status", "source_kind", "evidence", "file", "line", "reason",

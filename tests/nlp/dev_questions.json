@@ -1,0 +1,357 @@
+[
+ [
+  "Where is OrderDao?",
+  [
+   "LOCATE_SYMBOL",
+   "EXPLAIN"
+  ],
+  "OrderDao"
+ ],
+ [
+  "find the StockRepository class",
+  [
+   "LOCATE_SYMBOL",
+   "EXPLAIN"
+  ],
+  "StockRepository"
+ ],
+ [
+  "where is reserve_stock implemented",
+  [
+   "LOCATE_SYMBOL",
+   "EXPLAIN"
+  ],
+  "services.py"
+ ],
+ [
+  "show me OrderController",
+  [
+   "LOCATE_SYMBOL",
+   "EXPLAIN"
+  ],
+  "OrderController"
+ ],
+ [
+  "what methods are in OrderServiceImpl",
+  [
+   "LIST_METHODS"
+  ],
+  "validate"
+ ],
+ [
+  "list the functions of StockRepository",
+  [
+   "LIST_METHODS"
+  ],
+  "decrement"
+ ],
+ [
+  "members of OrderDao",
+  [
+   "LIST_METHODS"
+  ],
+  "updateStatus"
+ ],
+ [
+  "who calls validate",
+  [
+   "CALLERS"
+  ],
+  "OrderServiceImpl.place"
+ ],
+ [
+  "where is notify_orders used",
+  [
+   "CALLERS"
+  ],
+  "reserve_stock"
+ ],
+ [
+  "callers of OrderService.place",
+  [
+   "CALLERS"
+  ],
+  "OrderController.create"
+ ],
+ [
+  "who uses StockRepository.decrement",
+  [
+   "CALLERS"
+  ],
+  "reserve_stock"
+ ],
+ [
+  "what does reserve_stock call",
+  [
+   "CALLEES"
+  ],
+  "decrement"
+ ],
+ [
+  "which methods are invoked by OrderController.create",
+  [
+   "CALLEES"
+  ],
+  "OrderService.place"
+ ],
+ [
+  "which method handles GET /api/orders",
+  [
+   "API_HANDLER"
+  ],
+  "OrderController.list"
+ ],
+ [
+  "what code runs for DELETE /api/orders/{id}",
+  [
+   "API_HANDLER",
+   "FLOW"
+  ],
+  "cancel"
+ ],
+ [
+  "handler for POST /inventory/reserve",
+  [
+   "API_HANDLER"
+  ],
+  "reserve"
+ ],
+ [
+  "which tables does POST /api/orders touch",
+  [
+   "API_TO_DATA"
+  ],
+  "audit_log"
+ ],
+ [
+  "what data does GET /inventory/low-stock read",
+  [
+   "API_TO_DATA"
+  ],
+  "items"
+ ],
+ [
+  "does DELETE /api/orders/{id} write to the database",
+  [
+   "API_TO_DATA"
+  ],
+  "orders"
+ ],
+ [
+  "which tables does OrderDao.findAll query",
+  [
+   "SQL_TABLES"
+  ],
+  "customers"
+ ],
+ [
+  "columns of the customers table",
+  [
+   "SCHEMA"
+  ],
+  "name"
+ ],
+ [
+  "describe table orders",
+  [
+   "SCHEMA"
+  ],
+  "customer_id"
+ ],
+ [
+  "what fields does the items table have",
+  [
+   "SCHEMA"
+  ],
+  "warehouse_id"
+ ],
+ [
+  "who writes to audit_log",
+  [
+   "TABLE_USAGE"
+  ],
+  "OrderDao.insert"
+ ],
+ [
+  "which code reads the items table",
+  [
+   "TABLE_USAGE"
+  ],
+  "StockRepository"
+ ],
+ [
+  "which endpoints use the orders table",
+  [
+   "TABLE_USAGE"
+  ],
+  "GET /api/orders"
+ ],
+ [
+  "what breaks if I change OrderDao.insert",
+  [
+   "IMPACT"
+  ],
+  "POST /api/orders"
+ ],
+ [
+  "impact of modifying the customers table",
+  [
+   "IMPACT"
+  ],
+  "GET /api/orders"
+ ],
+ [
+  "if I delete StockRepository what is affected",
+  [
+   "IMPACT"
+  ],
+  "reserve"
+ ],
+ [
+  "is reserve_stock tested",
+  [
+   "TEST_COVERAGE"
+  ],
+  "test_reserve_stock_rejects_missing"
+ ],
+ [
+  "tests for GET /api/orders",
+  [
+   "TEST_COVERAGE"
+  ],
+  "listsOrders"
+ ],
+ [
+  "what does OrderServiceImpl depend on",
+  [
+   "DEPENDENCIES"
+  ],
+  "OrderDao"
+ ],
+ [
+  "path from OrderController to the customers table",
+  [
+   "PATH"
+  ],
+  "customers"
+ ],
+ [
+  "what endpoints does this app expose",
+  [
+   "LIST_APIS"
+  ],
+  "/inventory/low-stock"
+ ],
+ [
+  "show me all routes",
+  [
+   "LIST_APIS"
+  ],
+  "/api/orders"
+ ],
+ [
+  "list database tables",
+  [
+   "LIST_TABLES"
+  ],
+  "stock_events"
+ ],
+ [
+  "what is this repository about",
+  [
+   "SUMMARY"
+  ],
+  "orders"
+ ],
+ [
+  "explain the architecture",
+  [
+   "SUMMARY"
+  ],
+  "Controller"
+ ],
+ [
+  "how many endpoints are there",
+  [
+   "COUNT"
+  ],
+  "8"
+ ],
+ [
+  "how many tables",
+  [
+   "COUNT"
+  ],
+  "7"
+ ],
+ [
+  "count the tests",
+  [
+   "COUNT"
+  ],
+  "5"
+ ],
+ [
+  "list all controllers",
+  [
+   "LIST_TYPE"
+  ],
+  "OrderController"
+ ],
+ [
+  "show all services",
+  [
+   "LIST_TYPE"
+  ],
+  "OrderServiceImpl"
+ ],
+ [
+  "what happens when I call POST /api/orders",
+  [
+   "FLOW"
+  ],
+  "OrderServiceImpl.place"
+ ],
+ [
+  "request flow for GET /api/orders",
+  [
+   "FLOW"
+  ],
+  "OrderDao.findAll"
+ ],
+ [
+  "what does OrderServiceImpl.place do",
+  [
+   "EXPLAIN"
+  ],
+  "InventoryClient.reserve"
+ ],
+ [
+  "explain StockRepository",
+  [
+   "EXPLAIN"
+  ],
+  "decrement"
+ ],
+ [
+  "are there unused methods",
+  [
+   "UNUSED"
+  ],
+  "legacyExport"
+ ],
+ [
+  "what are the most used methods",
+  [
+   "HOTSPOTS"
+  ],
+  "getQuantity"
+ ],
+ [
+  "which endpoints have no tests",
+  [
+   "UNTESTED"
+  ],
+  "DELETE /api/orders"
+ ]
+]

@@ -7,6 +7,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 class OrderControllerTest {
     private OrderService service;
     private org.springframework.test.web.servlet.MockMvc mvc;
+    @org.mockito.Mock
+    private OrderService mockedService;
 
     @Test
     void listsOrders() throws Exception {
@@ -16,5 +18,10 @@ class OrderControllerTest {
     @Test
     void serviceFindsAll() {
         service.findAll();
+    }
+
+    @Test
+    void stubsMockedService() {
+        org.mockito.BDDMockito.given(mockedService.findAll()).willReturn(java.util.List.of());
     }
 }

@@ -1,0 +1,575 @@
+{
+ "repo": {
+  "repo_url": "/tmp/cand/gothinkster_django-realworld-example-app",
+  "repo_key": "gothinkster_django-realworld-example-app",
+  "ref": null,
+  "commit": "29c9d42831fa0cfc5a4aa7561f674396eacf20a2",
+  "analyzed_at": "2026-10-12T10:32:24+00:00",
+  "schema_version": "1.0.0",
+  "analyzer_version": "1.0.0",
+  "web_url": null,
+  "overview": {
+   "summary": [
+    "gothinkster_django-realworld-example-app is a Python REST API backend built with Django, Django REST Framework. README: \u201cThis repo is functionality complete \u2014 PR's and issues welcome!\u201d",
+    "It exposes 20 HTTP endpoints (19 linked to handler code), mainly for /articles, /profiles, /user, /users, /admin.",
+    "Data lives in 5 tables (main: articles_article, profiles_profile, articles_tag, articles_comment, authentication_user), accessed via Django ORM.",
+    "Architecture: Handlers talk to ORM models / database directly (MVC / active-record style). 0 tests exercise 0 of 20 endpoints directly."
+   ],
+   "readme": {
+    "title": "!Django DRF Example App",
+    "tagline": "This repo is functionality complete \u2014 PR's and issues welcome!",
+    "file": "README.md"
+   },
+   "frameworks": [
+    "Django",
+    "Django REST Framework",
+    "build: pip"
+   ],
+   "languages": {
+    "python": 44
+   },
+   "kind": "REST API backend",
+   "architecture_style": "Handlers talk to ORM models / database directly (MVC / active-record style)",
+   "layers": [
+    {
+     "layer": "controller",
+     "label": "Controllers / API handlers",
+     "classes": 11,
+     "functions": 0,
+     "examples": [
+      "ArticleViewSet",
+      "ArticlesFavoriteAPIView",
+      "ProfileFollowAPIView",
+      "UserRetrieveUpdateAPIView",
+      "ArticlesFeedAPIView"
+     ]
+    },
+    {
+     "layer": "service",
+     "label": "Services (business logic)",
+     "classes": 1,
+     "functions": 0,
+     "examples": [
+      "UserManager"
+     ]
+    },
+    {
+     "layer": "model",
+     "label": "Domain models / ORM entities",
+     "classes": 6,
+     "functions": 0,
+     "examples": [
+      "Profile",
+      "User",
+      "Article",
+      "Comment",
+      "Tag"
+     ]
+    },
+    {
+     "layer": "dto",
+     "label": "DTOs / schemas",
+     "classes": 7,
+     "functions": 0,
+     "examples": [
+      "ArticleSerializer",
+      "CommentSerializer",
+      "RegistrationSerializer",
+      "LoginSerializer",
+      "ProfileSerializer"
+     ]
+    },
+    {
+     "layer": "config",
+     "label": "Configuration",
+     "classes": 2,
+     "functions": 0,
+     "examples": [
+      "ArticlesAppConfig",
+      "AuthenticationAppConfig"
+     ]
+    },
+    {
+     "layer": "migration",
+     "label": "DB migrations",
+     "classes": 7,
+     "functions": 0,
+     "examples": [
+      "Migration",
+      "Migration",
+      "Migration",
+      "Migration",
+      "Migration"
+     ]
+    },
+    {
+     "layer": "other",
+     "label": "Other / utilities",
+     "classes": 8,
+     "functions": 6,
+     "examples": [
+      "ConduitJSONRenderer",
+      "TagRelatedField",
+      "JWTAuthentication",
+      "ArticleJSONRenderer",
+      "CommentJSONRenderer"
+     ]
+    }
+   ],
+   "layer_flows": [
+    {
+     "from": "controller",
+     "to": "model",
+     "calls": 4
+    }
+   ],
+   "service_bypass": [],
+   "resources": [
+    "/articles",
+    "/profiles",
+    "/user",
+    "/users",
+    "/admin",
+    "/tags"
+   ],
+   "tables": [
+    "articles_article",
+    "profiles_profile",
+    "articles_tag",
+    "articles_comment",
+    "authentication_user"
+   ],
+   "data_access": [
+    "Django ORM"
+   ],
+   "entry_points": [
+    "manage.py",
+    "conduit/wsgi.py"
+   ],
+   "modules": [
+    "conduit"
+   ],
+   "explanation": [
+    "Requests enter through controllers / api handlers (e.g. ArticleViewSet, ArticlesFavoriteAPIView, ProfileFollowAPIView), which map URLs to methods.",
+    "Business rules live in services (e.g. UserManager).",
+    "5 model class(es) map to database tables (e.g. Profile, User, Article).",
+    "Database access happens from: controllers / api handlers (7), other / utilities (4), dtos / schemas (3).",
+    "Start reading at: manage.py, conduit/wsgi.py."
+   ]
+  },
+  "graph_id": "gb9e378a1165"
+ },
+ "sample": [
+  {
+   "id": "rel:6a02fb512cda3132",
+   "type": "HANDLED_BY",
+   "status": "VERIFIED",
+   "kind": "DJANGO_URLCONF",
+   "source": "POST /api/articles/{}/comments",
+   "target": "conduit.apps.articles.views.CommentsListCreateAPIView.create",
+   "file": "conduit/apps/articles/urls.py",
+   "line": 21,
+   "snippet": "\n    url(r'^articles/(?P<article_slug>[-\\w]+)/comments/?$',\n        CommentsListCreateAPIView.as_view()),",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:2956f9805c19adf4",
+   "type": "HANDLED_BY",
+   "status": "VERIFIED",
+   "kind": "DJANGO_URLCONF",
+   "source": "POST /api/users",
+   "target": "conduit.apps.authentication.views.RegistrationAPIView.post",
+   "file": "conduit/apps/authentication/urls.py",
+   "line": 9,
+   "snippet": "    url(r'^user/?$', UserRetrieveUpdateAPIView.as_view()),\n    url(r'^users/?$', RegistrationAPIView.as_view()),\n    url(r'^users/login/?$', LoginAPIView.as_view()),",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:77b515b0c8b9db6d",
+   "type": "HANDLED_BY",
+   "status": "VERIFIED",
+   "kind": "DRF_ROUTER",
+   "source": "GET /api/articles/{}",
+   "target": "conduit.apps.articles.views.ArticleViewSet.retrieve",
+   "file": "conduit/apps/articles/urls.py",
+   "line": 11,
+   "snippet": "router = DefaultRouter(trailing_slash=False)\nrouter.register(r'articles', ArticleViewSet)\n",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:02c488ec6f774f9c",
+   "type": "HANDLED_BY",
+   "status": "VERIFIED",
+   "kind": "DJANGO_URLCONF",
+   "source": "POST /api/profiles/{}/follow",
+   "target": "conduit.apps.profiles.views.ProfileFollowAPIView.post",
+   "file": "conduit/apps/profiles/urls.py",
+   "line": 7,
+   "snippet": "    url(r'^profiles/(?P<username>\\w+)/?$', ProfileRetrieveAPIView.as_view()),\n    url(r'^profiles/(?P<username>\\w+)/follow/?$',\n        ProfileFollowAPIView.as_view()),",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:0f38bc7a2c561f04",
+   "type": "HANDLED_BY",
+   "status": "VERIFIED",
+   "kind": "DJANGO_URLCONF",
+   "source": "DELETE /api/articles/{}/comments/{}",
+   "target": "conduit.apps.articles.views.CommentsDestroyAPIView.destroy",
+   "file": "conduit/apps/articles/urls.py",
+   "line": 24,
+   "snippet": "\n    url(r'^articles/(?P<article_slug>[-\\w]+)/comments/(?P<comment_pk>[\\d]+)/?$',\n        CommentsDestroyAPIView.as_view()),",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:daa14b167e7ae4b8",
+   "type": "CALLS",
+   "status": "VERIFIED",
+   "kind": "PYTHON_CALL",
+   "source": "conduit.apps.articles.views.ArticlesFeedAPIView.list",
+   "target": "conduit.apps.articles.views.ArticlesFeedAPIView.get_queryset",
+   "file": "conduit/apps/articles/views.py",
+   "line": 223,
+   "snippet": "    def list(self, request):\n        queryset = self.get_queryset()\n        page = self.paginate_queryset(queryset)",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:b44aabe82813f468",
+   "type": "CALLS",
+   "status": "VERIFIED",
+   "kind": "PYTHON_CALL",
+   "source": "conduit.apps.articles.signals.add_slug_to_article_if_not_exists",
+   "target": "conduit.apps.core.utils.generate_random_string",
+   "file": "conduit/apps/articles/signals.py",
+   "line": 15,
+   "snippet": "        slug = slugify(instance.title)\n        unique = generate_random_string()\n",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:221a8cc1cf66accb",
+   "type": "CALLS",
+   "status": "VERIFIED",
+   "kind": "PYTHON_CALL",
+   "source": "conduit.apps.authentication.renderers.UserJSONRenderer.render",
+   "target": "conduit.apps.core.renderers.ConduitJSONRenderer.render",
+   "file": "conduit/apps/authentication/renderers.py",
+   "line": 21,
+   "snippet": "\n        return super(UserJSONRenderer, self).render(data)",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:70976b2e0df6d40d",
+   "type": "CALLS",
+   "status": "CANDIDATE",
+   "kind": "PYTHON_CALL_BY_UNIQUE_NAME",
+   "source": "conduit.apps.profiles.views.ProfileFollowAPIView.post",
+   "target": "conduit.apps.profiles.models.Profile.follow",
+   "file": "conduit/apps/profiles/views.py",
+   "line": 66,
+   "snippet": "\n        follower.follow(followee)\n",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:bc220f3cb4f1f3ca",
+   "type": "CALLS",
+   "status": "VERIFIED",
+   "kind": "PYTHON_CALL",
+   "source": "conduit.apps.core.exceptions._handle_not_found_error",
+   "target": "conduit.apps.core.exceptions._handle_generic_error",
+   "file": "conduit/apps/core/exceptions.py",
+   "line": 48,
+   "snippet": "    else:\n        response = _handle_generic_error(exc, context, response)\n",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:162c476ab0562b9b",
+   "type": "READS",
+   "status": "VERIFIED",
+   "kind": "DJANGO_ORM",
+   "source": "conduit.apps.articles.relations.TagRelatedField.get_queryset",
+   "target": "articles_tag",
+   "file": "conduit/apps/articles/relations.py",
+   "line": 8,
+   "snippet": "    def get_queryset(self):\n        return Tag.objects.all()\n",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:f218e883841f7789",
+   "type": "READS",
+   "status": "VERIFIED",
+   "kind": "DJANGO_ORM",
+   "source": "conduit.apps.articles.views.CommentsDestroyAPIView.destroy",
+   "target": "articles_comment",
+   "file": "conduit/apps/articles/views.py",
+   "line": 151,
+   "snippet": "        try:\n            comment = Comment.objects.get(pk=comment_pk)\n        except Comment.DoesNotExist:",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:9c11781a2d8b80e0",
+   "type": "READS",
+   "status": "VERIFIED",
+   "kind": "DJANGO_ORM",
+   "source": "conduit.apps.authentication.backends.JWTAuthentication._authenticate_credentials",
+   "target": "authentication_user",
+   "file": "conduit/apps/authentication/backends.py",
+   "line": 84,
+   "snippet": "        try:\n            user = User.objects.get(pk=payload['id'])\n        except User.DoesNotExist:",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:f661401340684da1",
+   "type": "READS",
+   "status": "VERIFIED",
+   "kind": "DJANGO_ORM",
+   "source": "conduit.apps.profiles.views.ProfileFollowAPIView.post",
+   "target": "profiles_profile",
+   "file": "conduit/apps/profiles/views.py",
+   "line": 59,
+   "snippet": "        try:\n            followee = Profile.objects.get(user__username=username)\n        except Profile.DoesNotExist:",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:d5a2a541f6370d1f",
+   "type": "READS",
+   "status": "VERIFIED",
+   "kind": "DJANGO_ORM",
+   "source": "conduit.apps.articles.views.ArticlesFeedAPIView.get_queryset",
+   "target": "articles_article",
+   "file": "conduit/apps/articles/views.py",
+   "line": 218,
+   "snippet": "    def get_queryset(self):\n        return Article.objects.filter(\n            author__in=self.request.user.profile.follows.all()",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:d92d4495afa404cf",
+   "type": "WRITES",
+   "status": "VERIFIED",
+   "kind": "DJANGO_ORM",
+   "source": "conduit.apps.articles.serializers.ArticleSerializer.create",
+   "target": "articles_article",
+   "file": "conduit/apps/articles/serializers.py",
+   "line": 49,
+   "snippet": "\n        article = Article.objects.create(author=author, **validated_data)\n",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:0633262e59395d96",
+   "type": "WRITES",
+   "status": "VERIFIED",
+   "kind": "DJANGO_ORM",
+   "source": "conduit.apps.articles.serializers.CommentSerializer.create",
+   "target": "articles_comment",
+   "file": "conduit/apps/articles/serializers.py",
+   "line": 97,
+   "snippet": "\n        return Comment.objects.create(\n            author=author, article=article, **validated_data",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:03d3a095c74931b5",
+   "type": "WRITES",
+   "status": "VERIFIED",
+   "kind": "DJANGO_ORM",
+   "source": "conduit.apps.articles.relations.TagRelatedField.to_internal_value",
+   "target": "articles_tag",
+   "file": "conduit/apps/articles/relations.py",
+   "line": 11,
+   "snippet": "    def to_internal_value(self, data):\n        tag, created = Tag.objects.get_or_create(tag=data, slug=data.lower())\n",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:21f58ba3d22753fd",
+   "type": "WRITES",
+   "status": "VERIFIED",
+   "kind": "DJANGO_ORM",
+   "source": "conduit.apps.authentication.signals.create_related_profile",
+   "target": "profiles_profile",
+   "file": "conduit/apps/authentication/signals.py",
+   "line": 15,
+   "snippet": "    if instance and created:\n        instance.profile = Profile.objects.create(user=instance)",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:1de5c40c686dc224",
+   "type": "MAPS_TO",
+   "status": "VERIFIED",
+   "kind": "DJANGO_MODEL",
+   "source": "conduit.apps.profiles.models.Profile",
+   "target": "profiles_profile",
+   "file": "conduit/apps/profiles/models.py",
+   "line": 6,
+   "snippet": "\nclass Profile(TimestampedModel):\n    # As mentioned, there is an inherent relationship between the Profile and",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:af8c750812063b07",
+   "type": "MAPS_TO",
+   "status": "VERIFIED",
+   "kind": "DJANGO_MODEL",
+   "source": "conduit.apps.articles.models.Article",
+   "target": "articles_article",
+   "file": "conduit/apps/articles/models.py",
+   "line": 6,
+   "snippet": "\nclass Article(TimestampedModel):\n    slug = models.SlugField(db_index=True, max_length=255, unique=True)",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:c78989dad9a4b7f3",
+   "type": "MAPS_TO",
+   "status": "VERIFIED",
+   "kind": "DJANGO_MODEL",
+   "source": "conduit.apps.authentication.models.User",
+   "target": "authentication_user",
+   "file": "conduit/apps/authentication/models.py",
+   "line": 56,
+   "snippet": "\nclass User(AbstractBaseUser, PermissionsMixin, TimestampedModel):\n    # Each `User` needs a human-readable unique identifier that we can use to",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:a8e7ae141a7c3cc7",
+   "type": "MAPS_TO",
+   "status": "VERIFIED",
+   "kind": "DJANGO_MODEL",
+   "source": "conduit.apps.articles.models.Tag",
+   "target": "articles_tag",
+   "file": "conduit/apps/articles/models.py",
+   "line": 42,
+   "snippet": "\nclass Tag(TimestampedModel):\n    tag = models.CharField(max_length=255)",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:72a4cb44d5b31bf9",
+   "type": "MAPS_TO",
+   "status": "VERIFIED",
+   "kind": "DJANGO_MODEL",
+   "source": "conduit.apps.articles.models.Comment",
+   "target": "articles_comment",
+   "file": "conduit/apps/articles/models.py",
+   "line": 30,
+   "snippet": "\nclass Comment(TimestampedModel):\n    body = models.TextField()",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:4e16649470c45658",
+   "type": "FOREIGN_KEY",
+   "status": "VERIFIED",
+   "kind": "ORM_COLUMN",
+   "source": "profiles_profile",
+   "target": "authentication_user",
+   "file": "conduit/apps/profiles/models.py",
+   "line": 11,
+   "snippet": "    # one -- related Profile model.\n    user = models.OneToOneField(\n        'authentication.User', on_delete=models.CASCADE",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:b48b68f425935e1b",
+   "type": "FOREIGN_KEY",
+   "status": "VERIFIED",
+   "kind": "ORM_COLUMN",
+   "source": "articles_comment",
+   "target": "profiles_profile",
+   "file": "conduit/apps/articles/models.py",
+   "line": 37,
+   "snippet": "\n    author = models.ForeignKey(\n        'profiles.Profile', related_name='comments', on_delete=models.CASCADE",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:940640331bb72e2c",
+   "type": "FOREIGN_KEY",
+   "status": "VERIFIED",
+   "kind": "ORM_COLUMN",
+   "source": "articles_comment",
+   "target": "articles_article",
+   "file": "conduit/apps/articles/models.py",
+   "line": 33,
+   "snippet": "\n    article = models.ForeignKey(\n        'articles.Article', related_name='comments', on_delete=models.CASCADE",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:c4b1e5b95f90deb4",
+   "type": "FOREIGN_KEY",
+   "status": "VERIFIED",
+   "kind": "ORM_COLUMN",
+   "source": "articles_article",
+   "target": "profiles_profile",
+   "file": "conduit/apps/articles/models.py",
+   "line": 18,
+   "snippet": "    # many `Article`s.\n    author = models.ForeignKey(\n        'profiles.Profile', on_delete=models.CASCADE, related_name='articles'",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  },
+  {
+   "id": "rel:aa630468cb169c70",
+   "type": "OVERRIDES",
+   "status": "VERIFIED",
+   "kind": "PYTHON_AST",
+   "source": "conduit.apps.authentication.renderers.UserJSONRenderer.render",
+   "target": "conduit.apps.core.renderers.ConduitJSONRenderer.render",
+   "file": "conduit/apps/authentication/renderers.py",
+   "line": 10,
+   "snippet": "\n    def render(self, data, media_type=None, renderer_context=None):\n        # If we recieve a `token` key as part of the response, it will by a",
+   "label": "correct",
+   "note": "",
+   "after_mock_fix": "present"
+  }
+ ],
+ "review": {
+  "reviewed": 29,
+  "correct": 29,
+  "tests_edges_after_fix": 0
+ }
+}

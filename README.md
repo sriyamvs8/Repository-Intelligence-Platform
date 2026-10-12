@@ -43,7 +43,7 @@ py -3.11 -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 copy .env.example .env          # GRAPH_BACKEND=in_memory works without any database
-python -m pytest -q              # 93 passed, 2 skipped (Neo4j tests need a running Neo4j)
+python -m pytest -q              # 102 passed, 2 skipped (Neo4j tests need a running Neo4j)
 python scripts\evaluate.py       # precision / recall on the labelled fixture
 python -m uvicorn backend.app:app --reload
 ```
@@ -93,38 +93,32 @@ python scripts/cli.py ask <graph_id> "Which tables are touched by POST /owners/n
 | GET | `/api/graph/{gid}/view?mode=architecture\|ecosystem\|hops\|cross-language` | bounded projections (`max_nodes`, `hops` ≤ 3) |
 | GET | `/api/graph/{gid}/node?entity_id=` | entity + grouped relationships with evidence |
 | GET | `/api/graph/{gid}/query/{name}` | `apis_and_handlers`, `api_to_database_path`, `sql_and_tables`, `tables_and_columns`, `call_graph`, `classes_and_methods`, `inheritance`, `tests_and_targets`, `dependencies_of`, `impact_of`, `cross_language` |
-| GET | `/api/graph/{gid}/impact?root_id=` · `/path?from_id=&to_id=` | impact analysis, shortest path |
+| GET | `/api/graph/{gid}/impact?root_id=` · `/path?from_id=&to_id=` | impact analysis (raw), shortest path |
+| GET | `/api/graph/{gid}/profile` | 4-line plain-English summary + architecture (layers, frameworks, data model, central components) |
+| GET | `/api/graph/{gid}/flow?api_id=` | request flow of one endpoint: lanes (Client → API → Controller → Service → Data access → Model → SQL → Database) + numbered evidence steps |
+| GET | `/api/graph/{gid}/impact-report?root_id=&depth=` | risk level, blast radius 0–100, scored items, tests to run, untested APIs, heuristic "potential" effects, recommendations, model description |
+| GET | `/api/graph/{gid}/edge?edge_id=` | one relationship with evidence, file, line and code snippet |
 | POST | `/api/graph/{gid}/ask` `{question, context_entity_id?}` | graph-grounded answer: `status`, `answer`, `facts`, `paths`, `graph`, `cypher`, `query_plan`, `planner` |
 | POST | `/api/graph/{gid}/ask/feedback` | helpful / not helpful (evaluation data) |
 
 Answer `status`: `ANSWERED`, `INSUFFICIENT_EVIDENCE`, `NOT_FOUND`, `CLARIFY` (ambiguous → candidates), `UNSUPPORTED`.
+Every answer carries `answer_nl` (plain English), `answer_dev` (names, files, lines, link status), `cypher`,
+`breakdown` (intent → entity resolution → query choice → execution → evidence check) and `facts`.
 Intents: `LOCATE_SYMBOL, LIST_METHODS, CALLERS, CALLEES, API_HANDLER, API_TO_DATA, SQL_TABLES, SCHEMA, TABLE_USAGE,
-DEPENDENCIES, IMPACT, TEST_COVERAGE, PATH, LIST_APIS, LIST_TABLES, SUMMARY`.
+DEPENDENCIES, IMPACT, TEST_COVERAGE, PATH, LIST_APIS, LIST_TABLES, SUMMARY, COUNT, LIST_TYPE, FLOW, EXPLAIN, UNUSED,
+HOTSPOTS, UNTESTED`. Names are fuzzy-matched (≥ 0.8) with a visible "interpreted as" note.
 
-## Measured results (12 Oct 2026)
+## Measured results (12 Oct 2026) — full report in [docs/EVALUATION.md](docs/EVALUATION.md)
 
-**Labelled fixture** (`tests/fixtures/shop`: Spring + JDBC + MyBatis + OpenAPI, FastAPI + SQLAlchemy, SQL schema, cross-language HTTP):
-precision = recall = F1 = **1.00** for HANDLED_BY, CALLS, OVERRIDES, IMPLEMENTS, data access, HAS_COLUMN, FOREIGN_KEY,
-MAPS_TO, CROSS_LANGUAGE_MAP, TESTS; 20/20 labelled NL questions answered with the correct intent. The fixture covers
-the supported patterns by design — it proves the rules work, not that every real repository is handled.
+| Check | Result |
+|---|---|
+| Labelled fixture, 10 relationship types | P = R = F1 = **1.00**, 8/8 APIs, 0 forbidden edges |
+| Real repos, 119 hand-checked random edges (petclinic-rest, spring-boot-realworld, django-realworld) | **95.8 %** → 100 % after fixing mock-stub TESTS edges; fresh 24/24 re-check |
+| Endpoint → handler coverage (5 repos) | 100 % of implemented endpoints (only spec-only `/oops` and Django's library `/admin` have no handler — correctly) |
+| NL questions dev / held-out / frozen blind | 50/50 · 26/26 (first blind run 22/26) · 20/20 (official first run 19/20) |
+| Speed | petclinic-rest 0.6 s, mall-swarm (638 files, 32 k edges) 3.8 s, commons-lang 6.2 s (local clone) |
 
-**Real public repositories** (analysis time, single thread):
-
-| Repository | Files scanned | Entities | Endpoints with handler | Notes |
-|---|---|---|---|---|
-| spring-projects/spring-petclinic | 64 | 465 | 17/17 | JPA + Spring Data, MockMvc tests linked to endpoints — 0.2 s |
-| spring-petclinic/spring-petclinic-rest | 123 | 1 086 | 37/38 | openapi-generator controllers linked as CANDIDATE — 0.4 s |
-| miguelgrinberg/microblog | 34 | 257 | 35/35 | Flask blueprints + SQLAlchemy — 0.1 s |
-| pallets/flask (examples + tests) | 88 | 1 098 | 35/35 | raw sqlite SQL in tutorial app — 0.5 s |
-| fastapi/full-stack-fastapi-template | 52 | 294 | 23/23 | SQLModel `table=True` only — 0.1 s |
-| gothinkster/django-realworld-example-app | 44 | 214 | 19/20 | Django ORM, abstract base models — 0.04 s |
-| mybatis/jpetstore-6 | 71 | 724 | 22/22 | MyBatis XML mappers → tables — 0.3 s |
-| macrozheng/mall-swarm | 696 | 18 032 | 238/238 | 104 MyBatis mappers, 685 WRITES — 3.3 s, 281 MB |
-| apache/commons-lang | 662 | 12 751 | – | 6 680 calls, 11 561 test links — 5.0 s |
-
-"Files scanned" counts Java/Python/SQL plus JSON/YAML/XML candidates (non-spec/non-mapper ones are dropped).
-These are coverage/performance figures; precision on real repositories should be measured by manually labelling a
-sample of edges (see `scripts/evaluate.py` for the method).
+![overview](docs/screenshots/01_overview.png)
 
 ## Project layout
 ```
@@ -139,6 +133,7 @@ backend/
   graph/store.py         store interface + in-memory backend (gzip JSON persistence)
   graph/neo4j_store.py   Neo4j backend (parameterised templates, allowlisted labels/types, read-only tx)
   graph/queries.py       bounded projections, impact (0-1 BFS), API→DB, paths, named queries
+  graph/insights.py      repo profile (4-line summary, architecture layers), request flow, impact risk report
   nlp/plan.py            QueryPlan schema + deterministic rule planner
   nlp/gemini.py          Gemini structured output + grounding check + circuit breaker
   nlp/cypher.py          NL → Cypher prompt (schema + examples), safety validator/rewriter, reviewed template Cypher
@@ -147,6 +142,9 @@ backend/
 frontend/                index.html, app.js, styles.css, vendor/ (Cytoscape + dagre + fCoSE, MIT, served locally)
 tests/                   pytest suite + labelled fixture + ground truth
 scripts/evaluate.py      precision/recall/F1 per relationship type
+scripts/eval_nlp.py      NL question accuracy (dev / held-out / frozen blind sets)
+scripts/sample_edges.py  reproducible random edge sample for manual precision review
+docs/                    USER_MANUAL.md, EVALUATION.md, GUIDE.md, screenshots/, eval/ (reviewed samples)
 scripts/cli.py           command line
 ```
 
@@ -154,7 +152,7 @@ scripts/cli.py           command line
 Repository content is untrusted data: nothing is executed; clones are shallow, hook-free, symlink-free, time- and
 size-limited and deleted after analysis; only `https://` URLs on `ALLOWED_GIT_HOSTS`; refs validated; XML parsed with
 defusedxml; YAML with `safe_load`; graph IDs validated; all Neo4j queries parameterised with allowlisted labels;
-the LLM never writes Cypher; optional `API_KEY` header auth; per-IP rate limits; security headers; secrets only in `.env`.
+LLM-written Cypher only runs after the allowlist validator in a READ transaction with a 10 s timeout; optional `API_KEY` header auth; per-IP rate limits; security headers; secrets only in `.env`.
 
 ## Known limitations (state these honestly in reviews)
 * Static analysis: reflection, dependency-injection by name, dynamic dispatch beyond declared types, runtime route

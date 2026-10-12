@@ -10,7 +10,6 @@ Schema:
 from __future__ import annotations
 
 import json
-from typing import Iterable
 
 from ..kg.model import EntityType, RelType
 from .store import GraphStore, rank_match
@@ -204,6 +203,11 @@ class Neo4jStore(GraphStore):
                           g=gid, types=list(types), st=statuses or None)
         res = sorted((_rel_out(r["r"], r["s"], r["t"]) for r in rows), key=lambda r: (r["type"], r["source"], r["target"]))
         return res[:limit]
+
+    def get_edge(self, gid, eid):
+        rows = self._read("MATCH (a:Entity)-[r {uid: $u}]->(b:Entity) RETURN properties(r) AS r, a.id AS s, b.id AS t",
+                          u=f"{gid}|{eid}")
+        return _rel_out(rows[0]["r"], rows[0]["s"], rows[0]["t"]) if rows else None
 
     def degree(self, gid, nid):
         rows = self._read("MATCH (n:Entity {uid: $u}) RETURN COUNT { (n)--() } AS d", u=f"{gid}|{nid}")

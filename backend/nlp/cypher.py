@@ -347,6 +347,30 @@ TEMPLATES: dict[str, str] = {
     "LIST_TABLES": "MATCH (t:Table {graph_id: $gid})\nOPTIONAL MATCH (t)-[:HAS_COLUMN]->(c:Column)\n"
                    "RETURN t.name AS table, t.id AS table_id, count(c) AS columns ORDER BY table LIMIT 200",
     "SUMMARY": "MATCH (n:Entity {graph_id: $gid})\nRETURN n.type AS type, count(*) AS count ORDER BY count DESC LIMIT 50",
+    "COUNT": "MATCH (n:Entity {graph_id: $gid})\nRETURN n.type AS type, count(*) AS count ORDER BY count DESC LIMIT 50",
+    "LIST_TYPE": "MATCH (n:Entity {graph_id: $gid}) WHERE n.type IN ['Class', 'Interface', 'Function']\n"
+                 "AND coalesce(n.is_test_code, false) = false\n"
+                 "RETURN n.type AS type, n.name AS name, n.id AS name_id, n.file AS file, n.line AS line ORDER BY name LIMIT 200",
+    "FLOW": "MATCH (a:RestApi {graph_id: $gid}) WHERE a.id IN $ids\n"
+            "MATCH p = (a)-[:HANDLED_BY|CALLS|EXECUTES|READS|WRITES*1..8]->(x:Entity)\n"
+            "WHERE all(r IN relationships(p) WHERE r.status IN $statuses)\n"
+            "RETURN [n IN nodes(p) | n.name] AS steps, [r IN relationships(p) | type(r)] AS hops_via, length(p) AS hops "
+            "ORDER BY hops LIMIT 100",
+    "EXPLAIN": "MATCH (n:Entity {graph_id: $gid}) WHERE n.id IN $ids\n"
+               "OPTIONAL MATCH (n)-[:CALLS|EXECUTES|READS|WRITES|HANDLED_BY|DEFINES]->(o:Entity)\n"
+               "OPTIONAL MATCH (i:Entity)-[:CALLS|HANDLED_BY|TESTS|INSTANTIATES]->(n)\n"
+               "RETURN n.name AS name, n.id AS name_id, n.type AS type, n.file AS file, n.line AS line, "
+               "collect(DISTINCT o.name) AS uses, collect(DISTINCT i.name) AS used_by LIMIT 10",
+    "UNUSED": "MATCH (m:Entity {graph_id: $gid}) WHERE m.type IN ['Method', 'Function'] AND coalesce(m.is_test_code, false) = false\n"
+              "AND NOT EXISTS { (m)<-[:CALLS|HANDLED_BY|TESTS|HTTP_CALLS|CROSS_LANGUAGE_MAP]-(:Entity) }\n"
+              "AND NOT EXISTS { (m)-[:OVERRIDES]->(:Entity) }\n"
+              "RETURN m.qualified_name AS method, m.id AS method_id, m.file AS file, m.line AS line LIMIT 200",
+    "HOTSPOTS": "MATCH (c:Entity {graph_id: $gid})-[r:CALLS]->(m:Entity)\n"
+                "RETURN m.qualified_name AS method, m.id AS method_id, count(r) AS callers ORDER BY callers DESC LIMIT 25",
+    "UNTESTED": "MATCH (a:RestApi {graph_id: $gid})\nWHERE NOT EXISTS { (:Test)-[:TESTS]->(a) }\n"
+                "AND NOT EXISTS { (a)-[:HANDLED_BY]->(:Entity)<-[:TESTS]-(:Test) }\n"
+                "OPTIONAL MATCH (a)-[:HANDLED_BY]->(h:Entity)\n"
+                "RETURN a.name AS api, a.id AS api_id, h.qualified_name AS handler, h.id AS handler_id ORDER BY api LIMIT 200",
 }
 
 TEMPLATE_NOTES = {

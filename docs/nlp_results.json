@@ -1,0 +1,8 @@
+{
+  "petclinic_blind": {
+    "questions": 20,
+    "intent_accuracy": 1.0,
+    "answer_accuracy": 1.0,
+    "failures": []
+  }
+}

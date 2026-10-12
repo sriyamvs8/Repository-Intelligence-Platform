@@ -28,6 +28,13 @@ SQLA_READ_FUNCS = {"query", "select", "get", "scalars", "get_or_404", "first_or_
 SQLA_WRITE_FUNCS = {"insert", "update", "delete"}
 SESSION_WRITE = {"add", "add_all", "delete", "merge", "bulk_save_objects", "bulk_insert_mappings"}
 import builtins as _builtins
+COMMON_METHOD_NAMES = set("""get set save delete update create filter all first last add remove append extend items keys
+values pop run start stop close open read write send execute commit rollback query validate process handle load dump
+dumps loads format join split strip replace copy clear count index sort to_dict dict json init setup teardown refresh
+flush merge exists find fetch list post put patch head options call apply build make parse render serialize
+deserialize clean is_valid get_object get_queryset perform_create perform_update to_representation emit log info
+debug warning error exception connect disconnect reset next iter encode decode lower upper scalar scalars one
+one_or_none fetchone fetchall fetchmany cursor""".split())
 BUILTINS = set(dir(_builtins))
 
 
@@ -137,6 +144,10 @@ class PythonAnalyzer:
         self.sql: list[dict] = []
         self.http: list[dict] = []
         self.local_types: dict[str, dict] = {}
+        self.views: dict[str, list] = {}          # function id -> rendered templates
+        self.redirects: dict[str, list] = {}      # function id -> [("path"|"endpoint", value)]
+        self.route_names: dict[str, set] = {}     # route name / endpoint name -> api ids
+        self.named_http: list = []                # (func, verb, route name, line, evidence) e.g. url_path_for("users:login")
         self._mod_cache: dict = {}
 
     # ================================================================ Phase A: declare
@@ -357,12 +368,47 @@ class PythonAnalyzer:
                 path = "" if attr != "route" else None
             if path is None:
                 continue
+            rname = next((self.static_str(kw.value, {}, mod)[0] for kw in d.keywords if kw.arg in ("name", "endpoint")), None)
             self.pending_routes.append(dict(func=pf, obj=obj, verbs=[v.upper() for v in verbs], path=path,
-                                            line=d.lineno, module=mod.name,
+                                            line=d.lineno, module=mod.name, route_name=rname,
                                             evidence=f"@{obj}.{attr}({path!r}) on {node.name}"))
 
     def _module_call(self, call: ast.Call, mod: PyModule) -> None:
         fn = call.func
+        # ---- Alembic migrations: op.create_table("users", sa.Column("id", sa.Integer, primary_key=True), ...)
+        if isinstance(fn, ast.Attribute) and fn.attr in ("create_table", "add_column") and isinstance(fn.value, ast.Name) \
+                and fn.value.id == "op" and call.args:
+            tname = self.static_str(call.args[0], {}, mod)[0]
+            if tname:
+                cols, fks = [], []
+                for a in call.args[1:]:
+                    if not isinstance(a, ast.Call):
+                        continue
+                    cname = (_dotted(a.func) or "").split(".")[-1]
+                    if cname == "Column" and a.args:
+                        col = self.static_str(a.args[0], {}, mod)[0]
+                        if not col:
+                            continue
+                        ctype, fk = "", None
+                        for x in a.args[1:]:
+                            d = _dotted(x.func if isinstance(x, ast.Call) else x) or ""
+                            if d.split(".")[-1] == "ForeignKey" and isinstance(x, ast.Call) and x.args:
+                                fk = self.static_str(x.args[0], {}, mod)[0]
+                            elif d and not ctype:
+                                ctype = d.split(".")[-1]
+                        pk = any(kw.arg == "primary_key" and isinstance(kw.value, ast.Constant) and kw.value.value for kw in a.keywords)
+                        nullable = not any(kw.arg == "nullable" and isinstance(kw.value, ast.Constant) and kw.value.value is False for kw in a.keywords)
+                        cols.append({"name": col, "type": ctype, "pk": bool(pk), "nullable": nullable})
+                        if fk:
+                            fks.append((col, fk))
+                    elif cname == "ForeignKeyConstraint" and len(a.args) >= 2 and isinstance(a.args[0], (ast.List, ast.Tuple)) \
+                            and isinstance(a.args[1], (ast.List, ast.Tuple)):
+                        for c, ref in zip(a.args[0].elts, a.args[1].elts):
+                            cs, rs = self.static_str(c, {}, mod)[0], self.static_str(ref, {}, mod)[0]
+                            if cs and rs:
+                                fks.append((cs, rs))
+                self.ctx.migrations.append({"table": tname, "columns": cols, "fks": fks, "file": mod.file,
+                                            "line": call.lineno, "op": fn.attr})
         if isinstance(fn, ast.Attribute) and fn.attr in ("register_blueprint", "include_router", "mount") and call.args:
             prefix = ""
             for kw in call.keywords:
@@ -389,7 +435,8 @@ class PythonAnalyzer:
             else:
                 v = view.func.value if (isinstance(view, ast.Call) and isinstance(view.func, ast.Attribute) and view.func.attr == "as_view") else view
                 self.django_urls.append(dict(module=mod.name, route=route, include=None, view=_dotted(v),
-                                             line=call.lineno, regex=name != "path"))
+                                             line=call.lineno, regex=name != "path",
+                                             name=next((self.static_str(kw.value, {}, mod)[0] for kw in call.keywords if kw.arg == "name"), None)))
         if isinstance(fn, ast.Attribute) and fn.attr == "register" and len(call.args) >= 2:
             prefix = self.static_str(call.args[0], {}, mod)[0]
             if prefix is not None:
@@ -532,6 +579,22 @@ class PythonAnalyzer:
         if isinstance(func, ast.Attribute) and name in ("save", "delete") and isinstance(func.value, ast.Name) and func.value.id in lt:
             self.orm_ops.append(dict(func=pf, model=lt[func.value.id], op="WRITES", line=line, evidence=evidence,
                                      kind="DJANGO_ORM", via="type"))
+        # ---- server-side views and redirects (navigation flow)
+        if name in ("render_template", "render", "TemplateResponse", "render_to_response") and call.args:
+            idx = 1 if name in ("render", "TemplateResponse") and len(call.args) > 1 else 0
+            v = self.static_str(call.args[idx], ls, mod)[0]
+            if v:
+                self.views.setdefault(pf.id, []).append(v)
+        if name in ("redirect", "RedirectResponse", "HttpResponseRedirect"):
+            target = call.args[0] if call.args else next((kw.value for kw in call.keywords if kw.arg == "url"), None)
+            if isinstance(target, ast.Call) and (_dotted(target.func) or "").split(".")[-1] in ("url_for", "reverse") and target.args:
+                ep = self.static_str(target.args[0], ls, mod)[0]
+                if ep:
+                    self.redirects.setdefault(pf.id, []).append(("endpoint", ep))
+            elif target is not None:
+                v, _ = self.static_str(target, ls, mod)
+                if v:
+                    self.redirects.setdefault(pf.id, []).append(("path" if v.startswith("/") else "endpoint", v))
         # ---- HTTP client / test client
         verb = HTTP_VERBS_PY.get(name)
         if name == "request" and len(call.args) >= 2:
@@ -539,6 +602,11 @@ class PythonAnalyzer:
         if verb and call.args and isinstance(func, ast.Attribute):
             url_node = call.args[1] if name == "request" else call.args[0]
             s, dyn = self.static_str(url_node, ls, mod)
+            if isinstance(url_node, ast.Call) and (_dotted(url_node.func) or "").split(".")[-1] in ("url_path_for", "url_for", "reverse") \
+                    and url_node.args:
+                rn = self.static_str(url_node.args[0], ls, mod)[0]
+                if rn:
+                    self.named_http.append((pf, verb, rn, line, evidence))
             if s:
                 if s.startswith("?"):
                     s2 = re.sub(r"^\?+", "", s)
@@ -835,6 +903,18 @@ class PythonAnalyzer:
                         break
         # ---- routes
         self._resolve_routes()
+        # ---- requests built from route names: client.post(app.url_path_for("users:login"))
+        for pf, verb, rn, line, evidence in self.named_http:
+            for aid in sorted(self.route_names.get(rn, set()) or self.route_names.get(rn.split(":")[-1].split(".")[-1], set())):
+                api = gb.get(aid)
+                if not api or api.props.get("http_method") not in (verb, "ANY"):
+                    continue
+                if pf.kind == EntityType.TEST.value:
+                    gb.rel(pf.id, aid, RelType.TESTS, kind="PYTHON_TEST_CLIENT", evidence=evidence, file=pf.file, line=line,
+                           reason=f"test sends {verb} to route named '{rn}'")
+                else:
+                    gb.rel(pf.id, aid, RelType.HTTP_CALLS, kind="PYTHON_HTTP_CLIENT", evidence=evidence, file=pf.file,
+                           line=line, reason=f"request to route named '{rn}'")
         # ---- calls
         for c in self.calls:
             self._resolve_call(c)
@@ -852,6 +932,38 @@ class PythonAnalyzer:
                    file=pf.file, line=op["line"], status=Status.CANDIDATE if op.get("weak") else Status.VERIFIED,
                    reason=f"ORM operation on model {pc.name}")
         # ---- SQL
+        # ---- Alembic migrations -> tables / columns / foreign keys
+        for mig in self.ctx.migrations:
+            tid = ensure_table(gb, mig["table"], file=mig["file"], line=mig["line"], defined=mig["op"] == "create_table",
+                               source=make_id("file", mig["file"]))
+            for col in mig["columns"]:
+                ensure_column(gb, mig["table"], col, file=mig["file"], line=mig["line"], kind="ALEMBIC_MIGRATION")
+            for col, ref in mig["fks"]:
+                ref_table = ref.split(".")[0] if "." in ref else ref
+                gb.rel(tid, ensure_table(gb, ref_table), RelType.FOREIGN_KEY, kind="ALEMBIC_MIGRATION",
+                       evidence=f"{col} -> {ref}", file=mig["file"], line=mig["line"],
+                       reason="ForeignKey declared in migration", column=col)
+        # ---- views / redirects as navigation metadata on handler functions
+        for fid, vs in self.views.items():
+            e = gb.get(fid)
+            if e:
+                e.props["renders_views"] = sorted(set(vs))[:10]
+        func_by_name: dict[str, list] = {}
+        for pf in self.funcs.values():
+            func_by_name.setdefault(pf.name, []).append(pf)
+        for fid, rs in self.redirects.items():
+            e = gb.get(fid)
+            if not e:
+                continue
+            out = []
+            for kind, val in rs:
+                if kind == "path":
+                    out.append({"path": val})
+                else:
+                    fname = val.split(".")[-1].split(":")[-1]
+                    cands = func_by_name.get(fname, [])
+                    out.append({"endpoint": val, "handler": cands[0].id if len(cands) == 1 else None})
+            e.props["redirects_to"] = out[:10]
         model_tables = {pc.name: pc.table for pc in model_by_qual.values()}
         for s in self.sql:
             add_sql(gb, s["sql"], file=s["file"], line=s["line"], language="python", executor_id=s["executor"],
@@ -859,6 +971,18 @@ class PythonAnalyzer:
                     exec_reason=s.get("reason", ""), dynamic=s["dynamic"])
         for pf in self.funcs.values():
             pf.node = None   # free memory
+
+    def _method_index(self) -> dict:
+        if getattr(self, "_midx", None) is None:
+            idx: dict[str, list] = {}
+            for pc in self.classes.values():
+                if pc.is_test_class or self.modules[pc.module].is_test:
+                    continue
+                for mname, pf in pc.methods.items():
+                    if pf.kind != EntityType.TEST.value:
+                        idx.setdefault(mname, []).append(pf)
+            self._midx = idx
+        return self._midx
 
     def _resolve_call(self, c: dict) -> None:
         gb = self.gb
@@ -925,6 +1049,29 @@ class PythonAnalyzer:
             else:
                 gb.rel(pf.id, inst.id, RelType.INSTANTIATES, kind="PYTHON_CALL", evidence=c["evidence"], file=pf.file,
                        line=c["line"], reason="constructor call resolved through scope/imports")
+        if target is None and inst is None and recv is not None and recv[0] == "name":
+            # aiosql / PugSQL: queries = aiosql.from_path(...); queries.get_user_by_email(conn, ...)
+            r = self.resolve_name(mod, recv[1])
+            if r and r[0] == "var":
+                m2, v = r[1]
+                if any(k in (m2.var_types.get(v) or "") for k in ("from_path", "from_str", "pugsql.module")):
+                    for sid in self.ctx.named_sql.get(name, []):
+                        gb.rel(pf.id, sid, RelType.EXECUTES, kind="AIOSQL", evidence=c["evidence"], file=pf.file,
+                               line=c["line"], reason=f"named query '{name}' loaded with {m2.var_types.get(v)}")
+                    if self.ctx.named_sql.get(name):
+                        self.ctx.stats["resolved_calls"] += 1
+                        return
+        if target is None and inst is None and recv is not None and name not in COMMON_METHOD_NAMES \
+                and len(name) > 3 and not name.startswith("__"):
+            # unknown receiver type: link only when exactly ONE non-test class in the repo defines this method
+            owners = self._method_index().get(name, [])
+            if len(owners) == 1 and pf.kind != EntityType.TEST.value:
+                t = owners[0]
+                gb.rel(pf.id, t.id, RelType.CALLS, kind="PYTHON_CALL_BY_UNIQUE_NAME", evidence=c["evidence"],
+                       file=pf.file, line=c["line"], status=Status.CANDIDATE, confidence=0.4,
+                       reason=f"receiver type unknown; '{name}' is defined by exactly one repository class")
+                self.ctx.stats["candidate_calls"] += 1
+                return
         if target is None:
             if inst is None and name not in BUILTINS:
                 self.ctx.stats["unresolved_calls"] += 1
@@ -991,8 +1138,10 @@ class PythonAnalyzer:
             pf: PyFunc = r["func"]
             kind = (self.modules[key[0]].routers[key[1]]["kind"].upper() + "_ROUTE") if key else "PYTHON_ROUTE_DECORATOR"
             for v in r["verbs"]:
-                add_route(self.ctx, method=v, path=path, handler_id=pf.id, file=pf.file, line=r["line"], language="python",
-                          kind=kind, evidence=r["evidence"], reason="route decorator on handler function")
+                aid = add_route(self.ctx, method=v, path=path, handler_id=pf.id, file=pf.file, line=r["line"], language="python",
+                                kind=kind, evidence=r["evidence"], reason="route decorator on handler function")
+                for nm in {r.get("route_name"), pf.name} - {None}:
+                    self.route_names.setdefault(nm, set()).add(aid)
         # ---- Django urls with include() prefixes
         prefix_of: dict[str, list[str]] = {}
         for _ in range(4):

@@ -11,7 +11,7 @@ try:
 except Exception:  # pragma: no cover
     SafeET = None
 
-from ..kg.model import Entity, EntityType, RelType, Status, api_id, make_id, normalize_route
+from ..kg.model import EntityType, RelType, Status, make_id, normalize_route
 from .common import AnalysisContext, add_route
 from .sql_analyzer import add_sql, looks_like_sql
 

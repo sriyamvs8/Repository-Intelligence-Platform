@@ -1,0 +1,22 @@
+[
+ ["Which method handles GET /owners/{ownerId}?", ["API_HANDLER"], "showOwner"],
+ ["which tables does POST /owners/new write", ["API_TO_DATA"], "owners"],
+ ["who calls findByLastNameStartingWith", ["CALLERS"], "findPaginatedForOwnersLastName"],
+ ["what columns does the pets table have", ["SCHEMA"], "birth_date"],
+ ["how many endpoints are there", ["COUNT"], "17"],
+ ["list all controllers", ["LIST_TYPE"], "OwnerController"],
+ ["explain VetController", ["EXPLAIN"], "showResourcesVetList"],
+ ["what happens when I call GET /vets", ["FLOW"], "vets"],
+ ["what is impacted if I change the visits table", ["IMPACT"], "visits/new"],
+ ["which endpoints have no tests", ["UNTESTED"], "endpoint"],
+ ["most called methods", ["HOTSPOTS"], "getName"],
+ ["where is PetTypeFormatter defined", ["LOCATE_SYMBOL", "EXPLAIN"], "PetTypeFormatter.java"],
+ ["which tests cover PetController", ["TEST_COVERAGE"], "PetControllerTests"],
+ ["what does OwnerController depend on", ["DEPENDENCIES"], "OwnerRepository"],
+ ["methods of the Owner class", ["LIST_METHODS"], "addPet"],
+ ["which code writes the pets table", ["TABLE_USAGE"], "pets"],
+ ["summarize this project", ["SUMMARY"], "owners"],
+ ["path from OwnerController to the owners table", ["PATH"], "owners"],
+ ["is CrashController tested", ["TEST_COVERAGE"], "CrashController"],
+ ["what does processNewVisitForm call", ["CALLEES"], "owners"]
+]
