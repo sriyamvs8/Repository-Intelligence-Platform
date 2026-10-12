@@ -1,0 +1,18 @@
+openapi: 3.0.3
+info:
+  title: Shop
+  version: "1.0"
+paths:
+  /api/orders:
+    get:
+      operationId: listOrders
+      summary: List orders
+    post:
+      operationId: createOrder
+  /api/orders/{orderId}:
+    get:
+      operationId: getOrder
+  /api/refunds:
+    post:
+      operationId: createRefund
+      summary: Documented but not implemented

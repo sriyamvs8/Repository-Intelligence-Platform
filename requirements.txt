@@ -1,0 +1,15 @@
+# Runtime (pinned, tested with Python 3.11-3.13)
+fastapi==0.143.0
+uvicorn[standard]==0.53.0
+pydantic==2.13.5
+python-dotenv>=1.0,<2
+tree-sitter==0.26.0
+tree-sitter-java==0.23.5
+sqlparse==0.6.0
+PyYAML==6.0.3
+defusedxml>=0.7.1
+neo4j==6.4.0
+google-genai==2.29.0
+# Tests
+pytest==9.1.1
+httpx==0.28.1

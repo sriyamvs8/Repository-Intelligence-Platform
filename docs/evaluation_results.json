@@ -1,0 +1,114 @@
+{
+  "HANDLED_BY": {
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "tp": 7,
+    "fp": 0,
+    "fn": 0,
+    "false_positives": [],
+    "missed": []
+  },
+  "CALLS": {
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "tp": 23,
+    "fp": 0,
+    "fn": 0,
+    "false_positives": [],
+    "missed": []
+  },
+  "OVERRIDES": {
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "tp": 4,
+    "fp": 0,
+    "fn": 0,
+    "false_positives": [],
+    "missed": []
+  },
+  "IMPLEMENTS": {
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "tp": 1,
+    "fp": 0,
+    "fn": 0,
+    "false_positives": [],
+    "missed": []
+  },
+  "DATA_ACCESS": {
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "tp": 10,
+    "fp": 0,
+    "fn": 0,
+    "false_positives": [],
+    "missed": []
+  },
+  "HAS_COLUMN": {
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "tp": 15,
+    "fp": 0,
+    "fn": 0,
+    "false_positives": [],
+    "missed": []
+  },
+  "FOREIGN_KEY": {
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "tp": 2,
+    "fp": 0,
+    "fn": 0,
+    "false_positives": [],
+    "missed": []
+  },
+  "MAPS_TO": {
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "tp": 2,
+    "fp": 0,
+    "fn": 0,
+    "false_positives": [],
+    "missed": []
+  },
+  "CROSS_LANGUAGE_MAP": {
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "tp": 2,
+    "fp": 0,
+    "fn": 0,
+    "false_positives": [],
+    "missed": []
+  },
+  "TESTS": {
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "tp": 4,
+    "fp": 0,
+    "fn": 0,
+    "false_positives": [],
+    "missed": []
+  },
+  "_overall": {
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0
+  },
+  "_apis": {
+    "expected": 8,
+    "found": 8,
+    "extra": [],
+    "missing": []
+  },
+  "_forbidden_violations": []
+}

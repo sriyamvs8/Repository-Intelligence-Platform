@@ -1,0 +1,19 @@
+services:
+  neo4j:
+    image: neo4j:5.26-community
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-change-me-please}
+    ports: ["7474:7474", "7687:7687"]
+    volumes: [neo4j-data:/data]
+  app:
+    build: .
+    env_file: .env
+    environment:
+      GRAPH_BACKEND: ${GRAPH_BACKEND:-neo4j}
+      NEO4J_URI: bolt://neo4j:7687
+    ports: ["8000:8000"]
+    volumes: [app-data:/app/data]
+    depends_on: [neo4j]
+volumes:
+  neo4j-data:
+  app-data:

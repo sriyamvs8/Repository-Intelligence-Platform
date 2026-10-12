@@ -1,0 +1,16 @@
+.env
+data/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.log
+node_modules/
+data/*
+!data/.gitkeep

@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Repository Knowledge Graph</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='8' cy='8' r='5' fill='%2360a5fa'/%3E%3Ccircle cx='24' cy='12' r='5' fill='%23a78bfa'/%3E%3Ccircle cx='13' cy='25' r='5' fill='%2334d399'/%3E%3Cpath d='M8 8L24 12L13 25Z' stroke='%2394a3b8' stroke-width='2' fill='none'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo">◆</span><div><b>Repository Knowledge Graph</b><small>Java · Python · SQL · REST</small></div></div>
+  <form id="analyzeForm" class="analyze" autocomplete="off">
+    <input id="repoUrl" type="text" placeholder="https://github.com/owner/repo" required aria-label="Repository URL" />
+    <input id="repoRef" type="text" placeholder="branch / tag (optional)" aria-label="Git ref" />
+    <label class="chk" title="Re-analyze even if this commit was analyzed before"><input id="force" type="checkbox" /> force</label>
+    <button type="submit" class="primary" id="analyzeBtn">Analyze</button>
+  </form>
+  <select id="graphSelect" aria-label="Analyzed repositories"><option value="">Analyzed repositories…</option></select>
+  <div class="badges" id="badges"></div>
+  <button class="icon" id="themeBtn" title="Toggle theme" aria-label="Toggle theme">◐</button>
+</header>
+<div id="progress" class="progress hidden"><div class="bar"><span id="progressBar"></span></div><span id="progressMsg"></span></div>
+
+<main class="layout">
+  <aside class="left">
+    <section class="card" id="summaryCard">
+      <h3>Repository</h3>
+      <div id="summary" class="muted">Analyze a public GitHub repository or pick one from the list.</div>
+    </section>
+    <section class="card">
+      <h3>Search</h3>
+      <input id="searchBox" type="search" placeholder="class, method, /route, table…" aria-label="Search entities" />
+      <ul id="searchResults" class="results"></ul>
+    </section>
+    <section class="card">
+      <h3>View</h3>
+      <div class="seg" id="modeSeg">
+        <button data-mode="architecture" class="on" title="API → code → SQL → tables">Architecture</button>
+        <button data-mode="ecosystem" title="Repository → directories → files">Structure</button>
+        <button data-mode="hops" title="Neighbourhood of the selected entity">Focus</button>
+        <button data-mode="cross-language" title="HTTP calls between services/languages">X-lang</button>
+      </div>
+      <div class="row"><label>Hops <input id="hops" type="range" min="1" max="3" value="1" /><span id="hopsVal">1</span></label>
+        <label>Max <input id="maxNodes" type="number" min="10" max="600" value="150" /></label></div>
+      <div class="row"><label class="chk"><input id="incCand" type="checkbox" checked /> candidate edges</label>
+        <label class="chk"><input id="incStruct" type="checkbox" /> structure</label>
+        <label class="chk"><input id="edgeLabels" type="checkbox" /> labels</label></div>
+      <div class="row"><label>Layout <select id="layoutSel">
+        <option value="dagre">Layered (dagre)</option><option value="fcose">Force (fCoSE)</option>
+        <option value="breadthfirst">Tree</option><option value="concentric">Concentric</option><option value="grid">Grid</option>
+      </select></label></div>
+    </section>
+    <section class="card">
+      <h3>Named queries</h3>
+      <div class="row"><select id="querySel">
+        <option value="apis_and_handlers">APIs and handlers</option>
+        <option value="api_to_database_path">API → database paths</option>
+        <option value="sql_and_tables">SQL and tables</option>
+        <option value="tables_and_columns">Tables and columns</option>
+        <option value="call_graph">Call graph</option>
+        <option value="classes_and_methods">Classes and methods</option>
+        <option value="inheritance">Inheritance</option>
+        <option value="tests_and_targets">Tests and targets</option>
+        <option value="cross_language">Cross-language</option>
+        <option value="impact_of">Impact of selected</option>
+        <option value="dependencies_of">Dependencies of selected</option>
+      </select><button id="runQuery">Run</button></div>
+    </section>
+    <section class="card">
+      <h3>Filters <button class="link" id="resetFilters">reset</button></h3>
+      <div id="typeFilters" class="filters"></div>
+      <div id="relFilters" class="filters rels"></div>
+    </section>
+  </aside>
+
+  <section class="center">
+    <div class="toolbar">
+      <span id="viewTitle" class="viewtitle">No graph loaded</span>
+      <span class="spacer"></span>
+      <button class="icon" id="fitBtn" title="Fit to view">⤢</button>
+      <button class="icon" id="zoomIn" title="Zoom in">+</button>
+      <button class="icon" id="zoomOut" title="Zoom out">−</button>
+      <button class="icon" id="expandBtn" title="Expand selected node">⊕</button>
+      <button class="icon" id="pngBtn" title="Export PNG">⇩</button>
+    </div>
+    <div id="cy" aria-label="Knowledge graph canvas"></div>
+    <div id="emptyState" class="empty">
+      <div class="emptyinner">
+        <h2>Understand a repository by its relationships</h2>
+        <p>Paste a public GitHub URL above. The analyzer extracts classes, methods, REST endpoints, SQL statements and tables, links them with evidence-backed edges and lets you ask questions in plain English.</p>
+        <div class="examples">
+          <button data-url="https://github.com/spring-projects/spring-petclinic">spring-petclinic (Java)</button>
+          <button data-url="https://github.com/spring-petclinic/spring-petclinic-rest">petclinic-rest (Java+OpenAPI)</button>
+          <button data-url="https://github.com/miguelgrinberg/microblog">microblog (Flask)</button>
+        </div>
+      </div>
+    </div>
+    <div id="legend" class="legend"></div>
+    <div id="truncNote" class="trunc hidden"></div>
+  </section>
+
+  <aside class="right">
+    <div class="tabs"><button data-tab="ask" class="on">Ask</button><button data-tab="details">Details</button><button data-tab="diag">Diagnostics</button></div>
+    <section id="tab-ask" class="tab on">
+      <div id="chat" class="chat">
+        <div class="hint">Ask about the analyzed repository, for example:
+          <ul class="sugg">
+            <li>Which tables are touched by POST /owners/new?</li>
+            <li>Who calls findById?</li>
+            <li>What is impacted if I change the owners table?</li>
+            <li>Which tests cover OwnerController?</li>
+            <li>list all endpoints</li>
+          </ul>
+        </div>
+      </div>
+      <form id="askForm" class="askform">
+        <textarea id="question" rows="2" placeholder="Ask a question about this repository…" aria-label="Question"></textarea>
+        <button class="primary" type="submit" id="askBtn">Ask</button>
+      </form>
+    </section>
+    <section id="tab-details" class="tab"><div id="details" class="muted pad">Select a node or edge in the graph.</div></section>
+    <section id="tab-diag" class="tab"><div id="diag" class="muted pad">No graph loaded.</div></section>
+  </aside>
+</main>
+
+<script src="/static/vendor/cytoscape.min.js"></script>
+<script src="/static/vendor/dagre.min.js"></script>
+<script src="/static/vendor/cytoscape-dagre.js"></script>
+<script src="/static/vendor/layout-base.js"></script>
+<script src="/static/vendor/cose-base.js"></script>
+<script src="/static/vendor/cytoscape-fcose.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

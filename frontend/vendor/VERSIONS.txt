@@ -1,0 +1,6 @@
+cytoscape 3.30.2 MIT
+dagre 0.8.5 MIT
+cytoscape-dagre 2.5.0 MIT
+layout-base 2.0.1 MIT
+cose-base 2.2.0 MIT
+cytoscape-fcose 2.2.0 MIT
