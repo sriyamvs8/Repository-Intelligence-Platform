@@ -7,8 +7,10 @@
 | In-memory graph store (persisted) + named queries, impact, API→DB, paths | done, tested |
 | Neo4j store (parameterised templates) | written; **run the parity test on your machine (step 5)** |
 | NLP `/ask` (rule planner, Gemini optional, grounding check, CLARIFY/abstain) | done, 20 labelled questions pass |
+| Gemini → Cypher (validator, self-repair, read-only execution, fallback) | done; 40 validator/routing tests pass with mocked Gemini — **verify live with your key (step 5)** |
+| Large-repo overview (handler class → table, grouped by module) | done, tested on 238-endpoint repo |
 | Cytoscape UI (architecture/structure/focus/x-lang, search, filters, evidence, ask, diagnostics) | done, browser-tested |
-| Tests: 53 pass · fixture precision/recall/F1 = 1.0 · clean install on Python 3.11 | verified |
+| Tests: 93 pass · fixture precision/recall/F1 = 1.0 · clean install on Python 3.11 | verified |
 
 ## 1. Install tools (once, ~20 min)
 1. **Git for Windows** — https://git-scm.com/download/win (defaults are fine).
@@ -27,7 +29,7 @@ py -3.11 -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 copy .env.example .env
-python -m pytest -q                     # expect: 53 passed, 1 skipped
+python -m pytest -q                     # expect: 93 passed, 2 skipped
 python scripts\evaluate.py              # expect: overall precision 1.0 recall 1.0
 python -m uvicorn backend.app:app --reload
 ```
@@ -42,18 +44,33 @@ git push -u origin main
 ```
 The included GitHub Actions workflow runs tests, Neo4j parity and evaluation on every push (Actions tab).
 
-## 4. Gemini (optional, 5 min)
-Get a key at https://aistudio.google.com/apikey → put `GEMINI_API_KEY=...` in `.env` → restart uvicorn.
-The top-right badge changes from "rule-based NLP" to "Gemini …". Never commit `.env`.
-
-## 5. Neo4j (Tuesday)
-```powershell
-docker compose up -d neo4j              # http://localhost:7474  user neo4j / change-me-please
-$env:NEO4J_TEST_URI="bolt://localhost:7687"; $env:NEO4J_TEST_PASSWORD="change-me-please"
-python -m pytest tests\test_store_parity.py -q     # must pass: same results as in-memory
+## 4. Neo4j (needed for Gemini → Cypher) — pick ONE
+**A. Neo4j AuraDB Free (no Docker, easiest):** https://console.neo4j.io → New instance → Free → download the
+credentials file. In `.env`:
 ```
-Then set `GRAPH_BACKEND=neo4j` and `NEO4J_PASSWORD=change-me-please` in `.env`, restart, re-analyze.
-In Neo4j Browser try: `MATCH (a:RestApi)-[:HANDLED_BY]->(m)-[:CALLS*1..4]->(x)-[:READS|WRITES]->(t:Table) RETURN a,m,x,t LIMIT 50`
+GRAPH_BACKEND=neo4j
+NEO4J_URI=neo4j+s://<id>.databases.neo4j.io
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=<from credentials file>
+```
+**B. Docker Desktop:** `docker compose up -d neo4j`, then `NEO4J_URI=bolt://localhost:7687`, password `change-me-please`.
+
+Verify (must pass):
+```powershell
+$env:NEO4J_TEST_URI="<your NEO4J_URI>"; $env:NEO4J_TEST_PASSWORD="<password>"
+python -m pytest tests\test_store_parity.py -q
+```
+Restart uvicorn and re-analyze your repos (graphs are stored per backend).
+
+## 5. Gemini key → natural language to Cypher
+1. Get a free key: https://aistudio.google.com/apikey → `.env`: `GEMINI_API_KEY=...` and `NLP_MODE=hybrid`.
+2. Restart uvicorn. The top-right badge must show **"Gemini → Cypher (gemini-2.5-flash)"**.
+3. Ask: "Which endpoints use POST?", "Who calls findById?", "How many methods does each controller have?".
+   Open the **Cypher** panel under the answer: it shows the Gemini-generated query that was validated and executed.
+4. Ask "What is impacted if I change the owners table?": impact uses the reviewed traversal, and the panel shows its
+   equivalent Cypher. Paste any shown query into Neo4j Browser (replace `$gid` with the graph id) to demonstrate it live.
+5. Free-tier limits: if you see "Gemini unavailable" in the answer notes, you hit the per-minute quota; wait a minute
+   (the system keeps answering from templates meanwhile). `GEMINI_MODEL=gemini-2.5-flash-lite` gives more free requests.
 
 ## 6. Working fast with Claude Code in VS Code
 `CLAUDE.md` in the project root tells Claude the architecture, commands and rules automatically.
@@ -67,7 +84,7 @@ Use **Plan** mode (`/plan`) for anything big, review the diff before accepting, 
 
 ## 7. Two-day plan
 **Mon evening:** steps 1–3; analyze 3 repos (petclinic, petclinic-rest, microblog); read README "Measured results".
-**Tue:** step 5 (Neo4j), step 4 (Gemini); label ~30 real edges from petclinic by hand (open file:line evidence in
+**Tue:** step 4 (Neo4j), step 5 (Gemini → Cypher); label ~30 real edges from petclinic by hand (open file:line evidence in
 the Details panel, mark correct/incorrect) → real-repo precision for your report; take screenshots.
 **Wed (before review):** rehearse the demo script below twice; keep `docs/screenshots` as backup if Wi-Fi fails
 (graphs persist in `data/`, so analyze BEFORE the review).

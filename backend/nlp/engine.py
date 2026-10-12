@@ -12,6 +12,8 @@ from ..config import settings
 from ..graph.queries import CALLABLE_TYPES, GraphQueries, slim_edge, slim_node
 from ..graph.store import GraphStore
 from ..kg.model import normalize_route
+from .cypher import (CypherRejected, entity_ids_in_rows, generate_cypher, rows_to_text, scope_rows, template_for,
+                     validate_cypher)
 from .gemini import explain_with_gemini, grounded, plan_with_gemini
 from .plan import EntityRef, Intent, QueryPlan, candidate_terms, rule_plan
 
@@ -32,6 +34,9 @@ PREFERRED_TYPES = {
     Intent.LOCATE_SYMBOL: None,
     Intent.PATH: None,
 }
+# complex analyses answered by reviewed, bounded traversals even when Gemini->Cypher is available
+TEMPLATE_FIRST = {Intent.IMPACT, Intent.API_TO_DATA, Intent.TEST_COVERAGE, Intent.PATH, Intent.TABLE_USAGE,
+                  Intent.DEPENDENCIES, Intent.SUMMARY, Intent.LIST_APIS, Intent.LIST_TABLES}
 PRONOUN_RE = re.compile(r"\b(it|its|this|that|them|those|these|same)\b", re.I)
 
 
@@ -127,8 +132,20 @@ class AskEngine:
         qid = uuid.uuid4().hex[:12]
         question = (question or "").strip()[:1000]
         rplan, terms, tterms = rule_plan(question)
+        if include_candidates is not None:
+            rplan.include_candidates = include_candidates
         plan, planner = rplan, "rules"
-        if settings.gemini_enabled:
+        cypher_note = None
+        # ---- 1. Gemini text-to-Cypher on Neo4j (validated, read-only), when configured
+        mode = settings.nlp_mode
+        if (settings.gemini_enabled and self.store.supports_cypher and mode in ("hybrid", "cypher")
+                and (mode == "cypher" or rplan.intent not in TEMPLATE_FIRST)):
+            cres = self._cypher_path(question, rplan, terms, context_entity_id)
+            if cres and cres.get("status") == "ANSWERED":
+                return self._finish(cres, question, rplan, "gemini → cypher", t0, qid, explain=True)
+            cypher_note = (cres or {}).get("note")
+        # ---- 2. structured plan (Gemini planner on in-memory backend, else rules) + reviewed traversals
+        elif settings.gemini_enabled:
             g = plan_with_gemini(question, self.q.schema_vocabulary(), context_entity_id)
             if g is not None:
                 plan, planner = g, "gemini"
@@ -143,19 +160,87 @@ class AskEngine:
             alt = self._execute(question, rplan, terms, tterms, context_entity_id)
             if alt["status"] == "ANSWERED":
                 resp, plan, planner = alt, rplan, "rules (gemini fallback)"
-        resp["answer_source"] = "template"
-        if resp["status"] == "ANSWERED" and resp["facts"]:
+        if cypher_note:
+            resp["limitations"].append(cypher_note)
+            planner = planner + " (cypher fallback)"
+        ids = [e["id"] for e in resp.get("resolved_entities", [])]
+        resp["cypher"] = template_for(plan.intent.value, ids, plan.include_candidates)
+        if resp["cypher"]:
+            resp["cypher"]["executed"] = False
+            resp["cypher"]["note"] = (resp["cypher"]["note"] + " " if resp["cypher"]["note"] else "") + (
+                "Answer computed by the equivalent reviewed traversal." )
+        return self._finish(resp, question, plan, planner, t0, qid, explain=True)
+
+    def _finish(self, resp: dict, question: str, plan: QueryPlan, planner: str, t0: float, qid: str,
+                explain: bool) -> dict:
+        resp["answer_source"] = "graph"
+        if explain and resp["status"] == "ANSWERED" and resp["facts"]:
             llm = explain_with_gemini(question, resp["facts"], resp["answer"])
             if llm and grounded(llm, resp["facts"]):
                 resp["explanation"] = llm
-                resp["answer_source"] = "template+llm"
+                resp["answer_source"] = "graph+llm"
             elif llm:
                 resp["limitations"].append("LLM explanation discarded: it mentioned entities not present in the graph results.")
+        resp.setdefault("cypher", None)
         resp.update({"question_id": qid, "question": question, "planner": planner,
                      "query_plan": plan.model_dump(mode="json"), "elapsed_ms": int((time.time() - t0) * 1000)})
         log.info("ask qid=%s intent=%s status=%s planner=%s facts=%d ms=%d", qid, plan.intent.value, resp["status"],
                  planner, len(resp["facts"]), resp["elapsed_ms"])
         return resp
+
+    # ------------------------------------------------------------------ Gemini text-to-Cypher
+    def _cypher_path(self, question: str, plan: QueryPlan, terms: list[str], ctx_id: str | None) -> dict | None:
+        hints, cands = self.resolve(plan.entity, PREFERRED_TYPES.get(plan.intent), terms) if (plan.entity or terms) else ([], [])
+        hints = [slim_node(n) for n in (hints or cands)[:8]]
+        ctx = slim_node(self.store.get_node(self.gid, ctx_id)) if ctx_id and self.store.get_node(self.gid, ctx_id) else None
+        raw = generate_cypher(question, hints, ctx)
+        if raw is None:
+            return {"note": "Gemini unavailable; answered with reviewed traversal."}
+        attempts = []
+        for attempt in range(2):
+            try:
+                q, notes = validate_cypher(raw)
+            except CypherRejected as exc:
+                attempts.append({"query": raw, "error": str(exc)})
+                if str(exc) == "UNSUPPORTED":
+                    return {"note": "Gemini could not express this as Cypher; answered with reviewed traversal."}
+                raw = generate_cypher(question, hints, ctx, previous=raw, error=str(exc)) if attempt == 0 else None
+                if raw is None:
+                    break
+                continue
+            try:
+                rows = scope_rows(self.store.run_cypher(q, {"gid": self.gid}), self.gid)
+            except Exception as exc:     # syntax/semantic error reported by Neo4j -> one repair attempt
+                attempts.append({"query": q, "error": str(exc)[:300]})
+                raw = generate_cypher(question, hints, ctx, previous=q, error=str(exc)[:300]) if attempt == 0 else None
+                if raw is None:
+                    break
+                continue
+            if not rows:
+                return {"note": "Gemini-generated Cypher returned no rows; answered with reviewed traversal instead.",
+                        "cypher": {"query": q, "notes": notes}}
+            ids = entity_ids_in_rows(rows)
+            nodes = self.store.get_nodes(self.gid, ids[:80])
+            idset = {n["id"] for n in nodes}
+            edges = []
+            for n in nodes:
+                for e, o, _ in self.store.neighbors(self.gid, n["id"], "out", None, None, limit=200):
+                    if o["id"] in idset and e["type"] not in ("CONTAINS",):
+                        edges.append(e)
+            facts = []
+            for r in rows:
+                desc = ", ".join(f"{k}={v}" for k, v in r.items() if not k.endswith("_id") and v not in (None, "", [])
+                                 and k not in ("file", "line", "status"))
+                facts.append({**r, "subject": desc[:240], "relationship": "", "object": "",
+                              "source_file": r.get("file"), "line": r.get("line"), "validation_status": r.get("status")})
+            res = self._result("ANSWERED", rows_to_text(rows), facts, graph=self._graph_of(nodes, edges),
+                               resolved=hints, limitations=["Answer produced by Gemini-generated Cypher, validated "
+                                                            "and executed read-only on Neo4j; facts are the raw rows."])
+            res["cypher"] = {"query": q, "params": {"gid": self.gid}, "source": "Gemini-generated · validated · executed read-only",
+                             "notes": notes, "repaired_from": attempts, "executed": True}
+            return res
+        return {"note": "Gemini-generated Cypher was rejected by the safety validator or failed in Neo4j "
+                        f"({attempts[-1]['error'][:120] if attempts else 'unknown'}); answered with reviewed traversal."}
 
     def _result(self, status: str, answer: str, facts=None, entities=None, paths=None, graph=None,
                 limitations=None, candidates=None, resolved=None) -> dict:

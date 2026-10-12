@@ -18,8 +18,10 @@ repositories and answers natural-language questions ONLY from graph facts. See R
    `backend/kg/model.py::ALLOWED_ENDPOINTS`; the validator in `backend/kg/pipeline.py` rejects anything else.
 4. IDs are built only with `make_id`/`api_id`/`table_id` in `backend/kg/model.py`.
 5. OpenAPI operations never imply `HANDLED_BY` (only the documented generator/Connexion conventions in `spec_analyzers.py`).
-6. The LLM never writes Cypher. It fills `QueryPlan` (backend/nlp/plan.py); queries are reviewed functions in
-   `backend/graph/queries.py`; Neo4j queries are parameterised templates in `backend/graph/neo4j_store.py`.
+6. LLM-written Cypher is allowed ONLY through `backend/nlp/cypher.py::validate_cypher` (read-only clauses,
+   allowlisted labels/types/properties/functions, `$gid` scoping, bounded `*..6`, LIMIT ≤ 200) and
+   `Neo4jStore.run_cypher` (READ session, 10 s timeout). Never bypass or weaken the validator; add a test in
+   tests/test_cypher.py for every change. Impact/API→DB/tests/paths stay on reviewed traversals (NLP_MODE=hybrid).
 7. Repository code is never executed. Keep acquire.py / scanner.py safety checks intact.
 8. Every projection/traversal must stay bounded (max_nodes, depth).
 
@@ -32,4 +34,4 @@ repositories and answers natural-language questions ONLY from graph facts. See R
 
 ## Layout
 backend/kg (model, acquire, scanner, pipeline) · backend/analyzers · backend/graph (store, neo4j_store, queries)
-· backend/nlp (plan, gemini, engine) · backend/api/jobs.py · backend/app.py · frontend/ · tests/ · scripts/
+· backend/nlp (plan, gemini, cypher, engine) · backend/api/jobs.py · backend/app.py · frontend/ · tests/ · scripts/

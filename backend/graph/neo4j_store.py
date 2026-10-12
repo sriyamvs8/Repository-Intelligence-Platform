@@ -23,10 +23,18 @@ REL_TYPES = {r.value for r in RelType}
 BATCH = 2000
 
 
+# extra properties promoted to real Neo4j properties so that (LLM-generated) Cypher can filter on them
+PROMOTED = ("http_method", "path", "normalized_path", "operation", "sql", "data_type", "primary_key", "nullable",
+            "signature", "class", "is_test_code", "documented", "return_type", "table", "parse_status",
+            "defined_in_schema", "kind", "spring_data_repository", "operation_id", "summary")
+
+
 def _node_row(gid: str, n: dict) -> dict:
     base = {k: n.get(k) for k in NODE_BASE}
     extra = {k: v for k, v in n.items() if k not in NODE_BASE}
-    return {"uid": f"{gid}|{n['id']}", "graph_id": gid, **base, "props_json": json.dumps(extra, default=str)}
+    promoted = {k: (v[:2000] if isinstance(v, str) else v) for k, v in extra.items()
+                if k in PROMOTED and isinstance(v, (str, int, float, bool))}
+    return {"uid": f"{gid}|{n['id']}", "graph_id": gid, **base, **promoted, "props_json": json.dumps(extra, default=str)}
 
 
 def _rel_row(gid: str, r: dict) -> dict:
@@ -39,7 +47,7 @@ def _rel_row(gid: str, r: dict) -> dict:
 def _node_out(rec) -> dict:
     d = dict(rec)
     extra = json.loads(d.pop("props_json", None) or "{}")
-    for k in ("uid", "graph_id"):
+    for k in ("uid", "graph_id") + PROMOTED:
         d.pop(k, None)
     return {**{k: d.get(k) for k in NODE_BASE}, **extra}
 
@@ -54,6 +62,7 @@ def _rel_out(rec, source: str, target: str) -> dict:
 
 class Neo4jStore(GraphStore):
     backend_name = "neo4j"
+    supports_cypher = True
 
     def __init__(self, settings) -> None:
         from neo4j import GraphDatabase
@@ -82,6 +91,24 @@ class Neo4jStore(GraphStore):
     def _write(self, query: str, **params) -> None:
         with self.driver.session(database=self.db) as s:
             s.execute_write(lambda tx: tx.run(query, params).consume())
+
+    def run_cypher(self, query: str, params: dict) -> list[dict]:
+        """Execute an already-validated read-only query: READ access mode, managed read transaction,
+        10 s server-side timeout, at most 200 rows."""
+        from neo4j import unit_of_work
+
+        @unit_of_work(timeout=10)
+        def work(tx):
+            res = tx.run(query, params)
+            out = []
+            for rec in res:
+                out.append(rec.data())
+                if len(out) >= 200:
+                    break
+            return out
+
+        with self.driver.session(database=self.db, default_access_mode="READ") as s:
+            return s.execute_read(work)
 
     # ------------------------------------------------------------------ writes
     def save_graph(self, gid, meta, report, entities, relationships, diagnostics, rejected) -> None:

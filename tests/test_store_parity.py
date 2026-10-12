@@ -32,3 +32,33 @@ def test_parity(tmp_path):
     assert a.named("api_to_database_path")["rows"] == b.named("api_to_database_path")["rows"]
     neo.delete_graph(res.graph_id)
     neo.close()
+
+
+def test_templates_execute_on_real_neo4j():
+    """Every reviewed template Cypher must be valid, read-only-executable Cypher on a real Neo4j."""
+    from backend.graph.neo4j_store import Neo4jStore
+    from backend.nlp.cypher import TEMPLATES, EXAMPLES, validate_cypher
+    s = Settings()
+    s.neo4j_uri = os.environ["NEO4J_TEST_URI"]
+    s.neo4j_user = os.getenv("NEO4J_TEST_USER", "neo4j")
+    s.neo4j_password = os.getenv("NEO4J_TEST_PASSWORD", "")
+    neo = Neo4jStore(s)
+    res = analyze_repository(FIXTURE)
+    neo.save_graph(res.graph_id, res.meta, res.report, res.entities, res.relationships, res.diagnostics, res.rejected)
+    ids = {"IMPACT": ["table:orders"], "API_TO_DATA": ["api:POST /api/orders"], "PATH": ["api:GET /api/orders", "table:orders"],
+           "SCHEMA": ["table:orders"], "TABLE_USAGE": ["table:orders"]}
+    for name, q in TEMPLATES.items():
+        q2, _ = validate_cypher(q)
+        rows = neo.run_cypher(q2, {"gid": res.graph_id, "ids": ids.get(name, ["method:com.shop.repo.OrderDao.insert(Order)"]),
+                                   "statuses": ["VERIFIED", "CANDIDATE"]})
+        assert isinstance(rows, list), name
+    rows = neo.run_cypher(validate_cypher(TEMPLATES["API_TO_DATA"])[0],
+                          {"gid": res.graph_id, "ids": ["api:POST /api/orders"], "statuses": ["VERIFIED", "CANDIDATE"]})
+    assert {"orders", "audit_log"} <= {r["table"] for r in rows}
+    for _, q in EXAMPLES:
+        neo.run_cypher(validate_cypher(q)[0], {"gid": res.graph_id})
+    # read-only enforcement: Neo4j itself refuses writes in a READ session
+    with pytest.raises(Exception):
+        neo.run_cypher("CREATE (n:Hack) RETURN n", {})
+    neo.delete_graph(res.graph_id)
+    neo.close()

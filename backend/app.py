@@ -106,13 +106,24 @@ class FeedbackRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------------- endpoints
+def nlp_status(st) -> dict:
+    cypher = settings.gemini_enabled and st.supports_cypher and settings.nlp_mode in ("hybrid", "cypher")
+    if cypher:
+        label, planner = f"Gemini → Cypher ({settings.gemini_model})", f"text-to-Cypher on Neo4j ({settings.nlp_mode}) + reviewed traversals"
+    elif settings.gemini_enabled:
+        label, planner = f"Gemini planner ({settings.gemini_model})", "Gemini QueryPlan + reviewed traversals (Cypher execution needs GRAPH_BACKEND=neo4j)"
+    else:
+        label, planner = "rule-based NLP", "rule planner + reviewed traversals (set GEMINI_API_KEY for Gemini)"
+    return {"enabled": settings.nlp_enabled, "gemini": settings.gemini_enabled, "text_to_cypher": cypher,
+            "mode": settings.nlp_mode, "model": settings.gemini_model if settings.gemini_enabled else None,
+            "label": label, "planner": planner}
+
+
 @app.get("/api/health")
 def health():
     st = get_store()
     return {"status": "ok", "schema_version": SCHEMA_VERSION, "analyzer_version": ANALYZER_VERSION,
-            "graph_backend": st.health(), "nlp": {"enabled": settings.nlp_enabled, "gemini": settings.gemini_enabled,
-                                                  "model": settings.gemini_model if settings.gemini_enabled else None,
-                                                  "planner": "gemini+rules" if settings.gemini_enabled else "rules"},
+            "graph_backend": st.health(), "nlp": nlp_status(st),
             "auth_required": bool(settings.api_key)}
 
 

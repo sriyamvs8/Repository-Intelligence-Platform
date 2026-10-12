@@ -53,6 +53,10 @@ class Settings:
     nlp_timeout: int = field(default_factory=lambda: _int("NLP_REQUEST_TIMEOUT_SECONDS", 30))
     nlp_max_rows: int = field(default_factory=lambda: _int("NLP_MAX_RESULT_ROWS", 50))
     nlp_max_hops: int = field(default_factory=lambda: _int("NLP_MAX_HOPS", 6))
+    # hybrid: complex analyses (impact, API->DB, tests, paths) use reviewed traversals; other questions use
+    #         Gemini text-to-Cypher on Neo4j, falling back to templates.  cypher: always try text-to-Cypher first.
+    #         templates: never let the LLM write Cypher.
+    nlp_mode: str = field(default_factory=lambda: os.getenv("NLP_MODE", "hybrid").lower())
     nlp_explain_with_llm: bool = field(default_factory=lambda: _bool("NLP_EXPLAIN_WITH_LLM", True))
     # API
     api_key: str = field(default_factory=lambda: os.getenv("API_KEY", ""))

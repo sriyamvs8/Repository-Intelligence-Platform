@@ -51,6 +51,10 @@ def rank_match(node: dict, q: str) -> int:
 
 class GraphStore(ABC):
     backend_name = "abstract"
+    supports_cypher = False
+
+    def run_cypher(self, query: str, params: dict) -> list[dict]:
+        raise NotImplementedError("Cypher execution requires GRAPH_BACKEND=neo4j")
 
     @abstractmethod
     def save_graph(self, gid: str, meta: dict, report: dict, entities: list[dict], relationships: list[dict],

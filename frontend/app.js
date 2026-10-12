@@ -24,7 +24,7 @@
     CONTAINS: "#5a6577", DEFINES: "#6b7689", IMPORTS: "#7d8aa0", CALLS: "#9db4d6", INSTANTIATES: "#8aa0c8",
     EXTENDS: "#8fb8ff", IMPLEMENTS: "#8fb8ff", OVERRIDES: "#b7a9ff", HANDLED_BY: "#ff8a5b", EXECUTES: "#f2c94c",
     READS: "#3fcf8e", WRITES: "#ff9f43", HAS_COLUMN: "#86e3b5", FOREIGN_KEY: "#2bb3a3", MAPS_TO: "#4fd1c5",
-    TESTS: "#ff6b9a", HTTP_CALLS: "#ff5d5d", CROSS_LANGUAGE_MAP: "#ff3b3b",
+    TESTS: "#ff6b9a", HTTP_CALLS: "#ff5d5d", CROSS_LANGUAGE_MAP: "#ff3b3b", DATA_ACCESS: "#3fcf8e",
   };
 
   const state = {
@@ -87,6 +87,14 @@
       { selector: 'edge[status = "CANDIDATE"]', style: { "line-style": "dashed", opacity: 0.6 } },
       { selector: 'edge[type = "CONTAINS"], edge[type = "DEFINES"]', style: { width: 0.9, opacity: 0.45, "target-arrow-shape": "none" } },
       { selector: 'edge[type = "CROSS_LANGUAGE_MAP"], edge[type = "HTTP_CALLS"]', style: { width: 3, "line-style": "dotted" } },
+      { selector: "edge[?aggregated]", style: { width: (e) => Math.min(1.5 + Math.log2(1 + (e.data("count") || 1)), 6),
+        "line-color": (e) => ((e.data("operations") || []).includes("WRITES") ? "#ff9f43" : "#3fcf8e"),
+        "target-arrow-color": (e) => ((e.data("operations") || []).includes("WRITES") ? "#ff9f43" : "#3fcf8e"), opacity: 0.7 } },
+      { selector: "node[?isModule]", style: { shape: "round-rectangle", "background-color": css("--panel2") || "#1b2330", "background-opacity": 0.55,
+        "border-color": css("--line") || "#283244", "border-width": 1, label: "data(label)", "text-valign": "top", "text-halign": "center",
+        "font-size": 30, "font-weight": 700, color: css("--muted") || "#8b98a9", padding: 24, "min-zoomed-font-size": 3, "text-max-width": 600, "text-wrap": "none" } },
+      { selector: "node.ov", style: { "font-size": 17, "min-zoomed-font-size": 4, "text-max-width": 200 } },
+      { selector: "node[api_count]", style: { width: (n) => Math.min(22 + 4 * Math.sqrt(n.data("api_count")), 60), height: (n) => Math.min(22 + 4 * Math.sqrt(n.data("api_count")), 60) } },
       { selector: "edge.labelled", style: { label: "data(type)" } },
       { selector: "edge:selected", style: { width: 3.5, opacity: 1, label: "data(type)" } },
       { selector: ".faded", style: { opacity: 0.12 } },
@@ -115,13 +123,17 @@
   function render(graph, title, opts = {}) {
     state.lastGraph = graph;
     cy.elements().remove();
-    const nodes = (graph.nodes || []).map((n) => ({ group: "nodes", data: { ...n, label: nodeLabel(n) } }));
+    const nodes = (graph.nodes || []).map((n) => ({ group: "nodes", data: { ...n, label: nodeLabel(n), ...(n.module ? { parent: "mod:" + n.module } : {}) } }));
+    const mods = [...new Set((graph.nodes || []).filter((n) => n.module).map((n) => n.module))];
+    if (mods.length > 1) mods.forEach((m) => nodes.unshift({ group: "nodes", data: { id: "mod:" + m, label: m, type: "Module", isModule: true } }));
+    else nodes.forEach((n) => delete n.data.parent);
     const ids = new Set(nodes.map((n) => n.data.id));
     const edges = (graph.edges || []).filter((e) => ids.has(e.source) && ids.has(e.target)).map((e) => ({ group: "edges", data: { ...e } }));
     cy.add(nodes); cy.add(edges);
     applyFilters();
     if (opts.root) cy.$id(opts.root).addClass("root");
-    runLayout(opts.layout);
+    if (graph.mode === "architecture-overview") cy.nodes().not("[?isModule]").addClass("ov");
+    runLayout(opts.layout || (graph.mode === "architecture-overview" ? "fcose" : undefined));
     $("#viewTitle").textContent = `${title} · ${nodes.length} nodes · ${edges.length} edges`;
     if (nodes.length) $("#emptyState").classList.add("hidden");
     else if (state.gid) {
@@ -144,7 +156,7 @@
     const visible = cy.elements().not(".filtered");
     let opts;
     if (sel === "dagre") opts = { name: "dagre", rankDir: state.mode === "ecosystem" ? "TB" : "LR", nodeSep: 26, rankSep: state.mode === "ecosystem" ? 60 : 150, edgeSep: 10, animate: false };
-    else if (sel === "fcose") opts = { name: "fcose", quality: "default", nodeRepulsion: 6500, idealEdgeLength: 70, animate: false, randomize: true };
+    else if (sel === "fcose") opts = { name: "fcose", quality: "proof", nodeRepulsion: 9000, idealEdgeLength: 90, nestingFactor: 0.6, gravity: 0.3, packComponents: true, animate: false, randomize: true, nodeDimensionsIncludeLabels: true };
     else if (sel === "breadthfirst") opts = { name: "breadthfirst", directed: true, spacingFactor: 1.1, animate: false };
     else if (sel === "concentric") opts = { name: "concentric", minNodeSpacing: 14, animate: false, concentric: (n) => n.degree() };
     else opts = { name: "grid", animate: false };
@@ -154,13 +166,13 @@
   }
 
   function buildLegend() {
-    const types = new Set(cy.nodes().map((n) => n.data("type")));
+    const types = new Set(cy.nodes().filter((n) => !n.data("isModule")).map((n) => n.data("type")));
     $("#legend").innerHTML = [...types].sort().map((t) => `<span class="item"><span class="dot" style="background:${TYPE_COLORS[t]}"></span>${t}</span>`).join("")
       + (cy.edges('[status = "CANDIDATE"]').length ? `<span class="item">┄ candidate edge</span>` : "");
   }
 
   function buildFilters() {
-    const types = [...new Set(cy.nodes().map((n) => n.data("type")))].sort();
+    const types = [...new Set(cy.nodes().filter((n) => !n.data("isModule")).map((n) => n.data("type")))].sort();
     const rels = [...new Set(cy.edges().map((e) => e.data("type")))].sort();
     $("#typeFilters").innerHTML = types.map((t) => `<span class="fchip ${state.hidden.has(t) ? "off" : ""}" data-t="${t}"><span class="dot" style="background:${TYPE_COLORS[t]}"></span>${t} <small class="muted">${cy.nodes(`[type = "${t}"]`).length}</small></span>`).join("");
     $("#relFilters").innerHTML = rels.map((r) => `<span class="fchip ${state.hiddenRels.has(r) ? "off" : ""}" data-r="${r}"><span class="dot" style="background:${REL_COLORS[r] || "#888"}"></span>${r}</span>`).join("");
@@ -245,7 +257,7 @@
     }
     try {
       const g = await api(`/api/graph/${state.gid}/view?${qs(p)}`);
-      const titles = { architecture: "Architecture: API → code → data", ecosystem: "Repository structure", hops: `Focus (${p.hops} hop${p.hops > 1 ? "s" : ""})`, "cross-language": "Cross-language HTTP calls" };
+      const titles = { architecture: g.mode === "architecture-overview" ? `Architecture overview: ${g.groups_shown}/${g.groups} handler classes → tables (orange = writes)` : "Architecture: API → code → data", ecosystem: "Repository structure", hops: `Focus (${p.hops} hop${p.hops > 1 ? "s" : ""})`, "cross-language": "Cross-language HTTP calls" };
       render(g, titles[state.mode], { root: p.root_id, emptyMsg: state.mode === "cross-language" ? "No HTTP calls between components were detected in this repository." : state.mode === "architecture" ? "No REST endpoints or tables were found. Try the Structure view or search." : undefined });
     } catch (e) { toast(e.message, true); }
   }
@@ -343,9 +355,11 @@
         ${r.explanation ? `<div class="expl"><span class="badge">LLM explanation · grounding-checked</span><div class="ans">${md(r.explanation)}</div></div>` : ""}
         ${r.candidates?.length ? `<div class="cands">${r.candidates.map((c) => `<button data-cid="${esc(c.id)}" title="${esc(c.qualified_name || c.id)}">${esc(c.type)}: ${esc(nodeLabel(c))}</button>`).join("")}</div>` : ""}
         ${(r.limitations || []).map((l) => `<div class="muted" style="margin-top:6px">ⓘ ${esc(l)}</div>`).join("")}
+        ${r.cypher ? `<details class="facts cy" ${r.cypher.executed ? "open" : ""}><summary>Cypher · ${esc(r.cypher.source)}${r.cypher.executed ? "" : " (equivalent of the executed traversal)"}</summary><pre class="sql">${esc(r.cypher.query)}</pre>${(r.cypher.notes || []).map((n) => `<div class="muted">• ${esc(n)}</div>`).join("")}${r.cypher.note ? `<div class="muted">${esc(r.cypher.note)}</div>` : ""}${(r.cypher.repaired_from || []).length ? `<div class="muted">• repaired after: ${esc(r.cypher.repaired_from.map((a) => a.error).join(" | "))}</div>` : ""}<button class="link" data-copy="1">copy</button></details>` : ""}
         ${facts ? `<details class="facts"><summary>${r.facts.length} supporting fact(s) from the graph</summary>${facts}</details>` : ""}
         <details class="facts"><summary>query plan</summary><pre class="sql">${esc(JSON.stringify(r.query_plan, null, 1))}</pre></details>
         <div class="fb"><button data-h="1">👍 helpful</button><button data-h="0">👎 not helpful</button></div>`;
+      holder.querySelector("[data-copy]")?.addEventListener("click", () => { try { navigator.clipboard.writeText(r.cypher.query); toast("Cypher copied"); } catch { /* clipboard unavailable */ } });
       holder.querySelectorAll("[data-cid]").forEach((b) => b.onclick = () => askQuestion(q, b.dataset.cid));
       holder.querySelectorAll("[data-h]").forEach((b) => b.onclick = async () => {
         await api(`/api/graph/${state.gid}/ask/feedback`, { method: "POST", body: JSON.stringify({ question_id: r.question_id, question: q, helpful: b.dataset.h === "1" }) });
@@ -462,7 +476,7 @@
   $("#question").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#askForm").requestSubmit(); } });
   $("#chat").addEventListener("click", (e) => { if (e.target.matches(".sugg li")) askQuestion(e.target.textContent); });
 
-  cy.on("tap", "node", (e) => showNode(e.target.id()));
+  cy.on("tap", "node", (e) => { if (!e.target.data("isModule")) showNode(e.target.id()); });
   cy.on("tap", "edge", (e) => showEdge(e.target));
   cy.on("dbltap", "node", (e) => showNode(e.target.id(), { focus: true }));
   cy.on("mouseover", "node", (e) => {
@@ -480,7 +494,7 @@
   (async () => {
     try {
       const h = await api("/api/health");
-      $("#badges").innerHTML = `<span class="badge ${h.graph_backend.ok ? "ok" : "bad"}">● ${esc(h.graph_backend.backend)}</span><span class="badge">${h.nlp.gemini ? "Gemini " + esc(h.nlp.model) : "rule-based NLP"}</span>`;
+      $("#badges").innerHTML = `<span class="badge ${h.graph_backend.ok ? "ok" : "bad"}">● ${esc(h.graph_backend.backend)}</span><span class="badge" title="${esc(h.nlp.planner)}">${esc(h.nlp.label)}</span>`;
     } catch (e) { $("#badges").innerHTML = '<span class="badge bad">● API offline</span>'; }
     loadGraphs();
   })();

@@ -43,7 +43,7 @@ py -3.11 -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 copy .env.example .env          # GRAPH_BACKEND=in_memory works without any database
-python -m pytest -q              # 53 passed, 1 skipped (Neo4j parity needs a running Neo4j)
+python -m pytest -q              # 93 passed, 2 skipped (Neo4j tests need a running Neo4j)
 python scripts\evaluate.py       # precision / recall on the labelled fixture
 python -m uvicorn backend.app:app --reload
 ```
@@ -58,10 +58,20 @@ NEO4J_TEST_URI=bolt://localhost:7687 NEO4J_TEST_PASSWORD=change-me-please python
 ```
 Whole stack in Docker: `docker compose up --build` → http://localhost:8000.
 
-### With Gemini (optional)
-Put `GEMINI_API_KEY=...` in `.env`. Gemini is used **only** to (1) fill a schema-validated `QueryPlan` and (2) phrase an
-explanation that must pass a grounding check (every backticked entity/file must exist in the returned facts).
-On any error/quota problem the system falls back to the deterministic planner for 60 s (circuit breaker).
+### With Gemini (free tier works) — natural language → Cypher → Neo4j
+1. Key from https://aistudio.google.com/apikey → `.env`: `GEMINI_API_KEY=...`, `GRAPH_BACKEND=neo4j`, `NLP_MODE=hybrid`.
+2. Ask anything in the UI. Lookup-style questions ("who calls X", "columns of table Y", "how many classes in package Z",
+   "which endpoints are POST") are translated by Gemini into Cypher, which then passes the safety validator
+   (`backend/nlp/cypher.py`): single read-only statement; CREATE/MERGE/SET/DELETE/CALL/LOAD CSV/apoc/UNION rejected;
+   labels, relationship types, properties and functions allow-listed; `{graph_id: $gid}` scoping mandatory;
+   variable-length paths bounded to `*..6`; LIMIT ≤ 200. It runs in a READ-mode Neo4j transaction with a 10 s timeout.
+   A rejected query is sent back to Gemini once with the reason (self-repair); if it still fails or returns no rows,
+   the reviewed traversal answers instead.
+3. Impact analysis, API → database, test coverage and path questions always use the reviewed bounded traversals
+   (weighted, direction-aware), and their equivalent Cypher is shown with the answer.
+4. Every answer shows its Cypher, whether it was Gemini-generated and executed or a reviewed template, plus the
+   grounded explanation. Gemini errors or quota limits (HTTP 429) trigger a 60 s circuit breaker and deterministic fallback.
+5. Without Neo4j (in-memory backend) Gemini is used as a QueryPlan planner and answers come from the reviewed traversals.
 
 ### CLI
 ```bash
@@ -84,7 +94,7 @@ python scripts/cli.py ask <graph_id> "Which tables are touched by POST /owners/n
 | GET | `/api/graph/{gid}/node?entity_id=` | entity + grouped relationships with evidence |
 | GET | `/api/graph/{gid}/query/{name}` | `apis_and_handlers`, `api_to_database_path`, `sql_and_tables`, `tables_and_columns`, `call_graph`, `classes_and_methods`, `inheritance`, `tests_and_targets`, `dependencies_of`, `impact_of`, `cross_language` |
 | GET | `/api/graph/{gid}/impact?root_id=` · `/path?from_id=&to_id=` | impact analysis, shortest path |
-| POST | `/api/graph/{gid}/ask` `{question, context_entity_id?}` | graph-grounded answer: `status`, `answer`, `facts`, `paths`, `graph`, `query_plan`, `planner` |
+| POST | `/api/graph/{gid}/ask` `{question, context_entity_id?}` | graph-grounded answer: `status`, `answer`, `facts`, `paths`, `graph`, `cypher`, `query_plan`, `planner` |
 | POST | `/api/graph/{gid}/ask/feedback` | helpful / not helpful (evaluation data) |
 
 Answer `status`: `ANSWERED`, `INSUFFICIENT_EVIDENCE`, `NOT_FOUND`, `CLARIFY` (ambiguous → candidates), `UNSUPPORTED`.
@@ -131,6 +141,7 @@ backend/
   graph/queries.py       bounded projections, impact (0-1 BFS), API→DB, paths, named queries
   nlp/plan.py            QueryPlan schema + deterministic rule planner
   nlp/gemini.py          Gemini structured output + grounding check + circuit breaker
+  nlp/cypher.py          NL → Cypher prompt (schema + examples), safety validator/rewriter, reviewed template Cypher
   nlp/engine.py          entity resolution (CLARIFY on ambiguity), intent handlers, answer packaging
   api/jobs.py            background analysis jobs, de-duplication, commit cache
 frontend/                index.html, app.js, styles.css, vendor/ (Cytoscape + dagre + fCoSE, MIT, served locally)
