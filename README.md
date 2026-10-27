@@ -16,6 +16,90 @@ exploration and **graph-grounded natural-language questions** (Gemini optional, 
  Question ─► QueryPlan (Gemini structured output OR rule planner) ─► validate ─► allowlisted read-only query ─► facts ─► answer (+grounding check)
 ```
 
+## Architecture
+
+```mermaid
+flowchart TB
+    User([User / CLI / API client])
+    subgraph UI["Frontend (frontend/)"]
+        Web["index.html + app.js<br/>Cytoscape graph, evidence inspector"]
+    end
+    subgraph API["FastAPI service (backend/app.py, api/jobs.py)"]
+        Jobs["Background analysis jobs<br/>commit cache, rate limits, auth"]
+    end
+    subgraph Build["Knowledge-graph build pipeline (backend/kg/)"]
+        Acquire["acquire.py<br/>safe shallow clone, never executes code"]
+        Scan["scanner.py<br/>exclusions, size and symlink guards"]
+        subgraph Analyzers["Language analyzers (backend/analyzers/)"]
+            Java["Java<br/>tree-sitter"]
+            Py["Python<br/>ast"]
+            Sql["SQL<br/>sqlparse + tokens"]
+            Spec["OpenAPI / MyBatis XML"]
+        end
+        Common["common.py<br/>cross-language linking:<br/>HTTP_CALLS, CROSS_LANGUAGE_MAP, HANDLED_BY, TESTS"]
+        Model[["model.py: shared ontology<br/>14 entity types, 18 relationship types,<br/>ALLOWED_ENDPOINTS, make_id, GraphBuilder"]]
+        Validate["pipeline.py validate()<br/>reject edges that break the ontology<br/>(VERIFIED / CANDIDATE / REJECTED)"]
+    end
+    subgraph Store["Graph store (backend/graph/)"]
+        Mem[("In-memory<br/>gzip JSON")]
+        Neo[("Neo4j<br/>read-only tx")]
+        Queries["queries.py + insights.py<br/>bounded views, impact, API to DB,<br/>request flow, risk report"]
+    end
+    subgraph NLP["Question answering (backend/nlp/)"]
+        Plan["plan.py<br/>rule planner"]
+        Gem["gemini.py<br/>structured output + grounding check"]
+        Cy["cypher.py<br/>read-only Cypher safety validator"]
+        Eng["engine.py<br/>entity resolution, intent handlers"]
+    end
+
+    User --> Web --> API
+    API -->|GitHub URL| Acquire --> Scan --> Analyzers --> Common --> Validate
+    Model -.defines the rules for.-> Analyzers
+    Model -.defines the rules for.-> Common
+    Model -.defines the rules for.-> Validate
+    Validate --> Mem
+    Validate --> Neo
+    Mem --> Queries
+    Neo --> Queries
+    API -->|question| Eng
+    Eng --> Plan
+    Eng --> Gem --> Cy --> Neo
+    Eng --> Queries
+    Queries -->|facts with file:line evidence| Eng -->|grounded answer| API
+```
+
+**Flow in one line:** GitHub URL → safe clone → scan → per-language analyzers → cross-language linker → ontology validator →
+graph store → bounded queries → UI / API / natural-language answers (every fact cites file and line).
+
+## Ontology rules (the scalable core, `backend/kg/model.py`)
+
+All analyzers emit the same vocabulary, so the validator, store, queries and NLP layer never depend on a specific language.
+
+| Layer | Count |
+|---|---|
+| Entity types | **14** (Repository, Directory, File, Class, Interface, Enum, Method, Constructor, Function, RestApi, SqlQuery, Table, Column, Test) |
+| Relationship types | **18** (CONTAINS, DEFINES, IMPORTS, CALLS, INSTANTIATES, EXTENDS, IMPLEMENTS, OVERRIDES, HANDLED_BY, EXECUTES, READS, WRITES, HAS_COLUMN, FOREIGN_KEY, MAPS_TO, TESTS, HTTP_CALLS, CROSS_LANGUAGE_MAP) |
+| Endpoint-type rules | **18** (`ALLOWED_ENDPOINTS`: which source and target types each relationship may connect) |
+| Evidence status | 3 (VERIFIED, CANDIDATE, REJECTED) |
+
+Rules each analyzer uses:
+
+| Analyzer | Rules | What they mean |
+|---|---|---|
+| **Java** | 12: DEFINES, IMPORTS, EXTENDS, IMPLEMENTS, OVERRIDES, CALLS, INSTANTIATES, MAPS_TO, FOREIGN_KEY, READS, WRITES, TESTS | declarations, inheritance, method calls, JPA entity to table, table access, JUnit coverage |
+| **Python** | 13: DEFINES, IMPORTS, EXTENDS, OVERRIDES, CALLS, INSTANTIATES, MAPS_TO, FOREIGN_KEY, READS, WRITES, EXECUTES, TESTS, HTTP_CALLS | same as Java (no interfaces), plus SQL execution and HTTP client calls |
+| **SQL** | 6: DEFINES, HAS_COLUMN, FOREIGN_KEY, READS, WRITES, EXECUTES | tables and columns, foreign keys, which statements read or modify which table |
+| **OpenAPI** | 2: DEFINES, HANDLED_BY | endpoints from the contract; handler link only through documented generator conventions, never from the contract alone |
+| **Cross-language linker** | 4: HANDLED_BY, TESTS, HTTP_CALLS, CROSS_LANGUAGE_MAP | route normalization lets a client in one language link to an endpoint in another |
+| **Filesystem** | 1: CONTAINS | repository and directory structure |
+
+Why this scales:
+1. **One ontology, many parsers.** A new language only has to emit the shared types and relationships.
+2. **Rules are data.** A new relationship is one enum value plus one `ALLOWED_ENDPOINTS` row; the validator, Cypher allowlist and schema output pick it up.
+3. **Grouped types** (`TYPES`, `CALLABLES`, `CODE_DECLS`) let one rule cover Java methods, Python functions and constructors.
+4. **Central validation.** A faulty analyzer cannot corrupt the graph; bad edges are REJECTED with a reason.
+5. **Evidence on every edge.** Ambiguous matches stay CANDIDATE and are never presented as fact.
+
 ## What is extracted
 
 | Area | Supported patterns | Edges |
